@@ -83,7 +83,7 @@ export function ActionPlan({
     : recommendations.slice(0, 3);
 
   return (
-    <Card className="border-primary/30 h-full flex flex-col justify-between">
+    <Card className="border-primary/30 h-full flex flex-col">
       <CardHeader className="pb-3 space-y-1.5">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-2">
@@ -101,7 +101,8 @@ export function ActionPlan({
         </CardDescription>
       </CardHeader>
 
-      <CardContent className="space-y-3">
+      <CardContent className="flex-1 flex flex-col justify-between gap-3">
+        <div className="space-y-3">
         {visibleRecommendations.map((rec) => {
           const pStyle = priorityBadgeStyles[rec.priority];
           const existingMission = missions.find(
@@ -218,6 +219,7 @@ export function ActionPlan({
             </div>
           );
         })}
+        </div>
 
         {recommendations.length > 3 && (
           <div className="pt-1 text-center">

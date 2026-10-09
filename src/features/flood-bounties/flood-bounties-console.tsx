@@ -148,16 +148,15 @@ export function FloodBountiesConsole() {
     [workerIdentity, user?.email, user?.username, activeWorker.name]
   );
 
-  const loadBounties = React.useCallback(async () => {
-    if (role !== "OPERATOR" && role !== "WORKER") return;
-    setIsLoadingBounties(true);
-    setBountiesError(null);
-    try {
-      const client = getDataClient();
-      const { data, errors } = await client.models.Bounty.list({ limit: 100 });
-      assertNoDataErrors(errors, "Unable to load bounties");
-
-      const sorted = [...(data ?? [])].sort((a, b) => {
+  const applyBountyRecords = React.useCallback(
+    (records: NonNullable<Awaited<ReturnType<ReturnType<typeof getDataClient>["models"]["Bounty"]["list"]>>["data"]>) => {
+      const uniqueById = new Map<string, (typeof records)[number]>();
+      for (const item of records) {
+        if (item && item.id) {
+          uniqueById.set(item.id, item);
+        }
+      }
+      const sorted = Array.from(uniqueById.values()).sort((a, b) => {
         const tA = a.updatedAt
           ? Date.parse(a.updatedAt)
           : a.createdAt
@@ -168,7 +167,8 @@ export function FloodBountiesConsole() {
           : b.createdAt
           ? Date.parse(b.createdAt)
           : 0;
-        return tB - tA;
+        if (tB !== tA) return tB - tA;
+        return a.id.localeCompare(b.id);
       });
       const mapped = sorted.map((record, index) =>
         mapBountyRecordToFloodWasteBounty(record, index)
@@ -185,16 +185,90 @@ export function FloodBountiesConsole() {
           ? prev
           : mapped[0]?.id ?? ""
       );
-    } catch (err) {
-      setBountiesError(formatDataError(err, "Unable to load bounties"));
-    } finally {
-      setIsLoadingBounties(false);
-    }
-  }, [role]);
+    },
+    []
+  );
+
+  const loadBounties = React.useCallback(
+    async (options?: { silent?: boolean }) => {
+      if (role !== "OPERATOR" && role !== "WORKER") return;
+      const silent = Boolean(options?.silent);
+      if (!silent) {
+        setIsLoadingBounties(true);
+        setBountiesError(null);
+      }
+      try {
+        const client = getDataClient();
+        const { data, errors } = await client.models.Bounty.list({
+          limit: 100,
+        });
+        assertNoDataErrors(errors, "Unable to load bounties");
+        applyBountyRecords(data ?? []);
+      } catch (err) {
+        if (!silent) {
+          setBountiesError(formatDataError(err, "Unable to load bounties"));
+        }
+      } finally {
+        if (!silent) {
+          setIsLoadingBounties(false);
+        }
+      }
+    },
+    [role, applyBountyRecords]
+  );
 
   React.useEffect(() => {
     void loadBounties();
   }, [loadBounties]);
+
+  // Real-time synchronization via AppSync observeQuery + lightweight background sync
+  React.useEffect(() => {
+    if (role !== "OPERATOR" && role !== "WORKER") return;
+
+    let isMounted = true;
+    const client = getDataClient();
+
+    let sub: { unsubscribe: () => void } | null = null;
+    try {
+      sub = client.models.Bounty.observeQuery().subscribe({
+        next: ({ items }) => {
+          if (!isMounted) return;
+          if (items && items.length > 0) {
+            applyBountyRecords(items);
+          }
+          void loadBounties({ silent: true });
+        },
+        error: () => {
+          // Field-level auth can restrict certain subscription payloads; fallback poll handles sync
+        },
+      });
+    } catch {
+      // Fallback interval handles synchronization
+    }
+
+    const intervalId = window.setInterval(() => {
+      if (document.visibilityState === "visible") {
+        void loadBounties({ silent: true });
+      }
+    }, 5000);
+
+    const handleFocusOrVisible = () => {
+      if (document.visibilityState === "visible") {
+        void loadBounties({ silent: true });
+      }
+    };
+
+    window.addEventListener("focus", handleFocusOrVisible);
+    document.addEventListener("visibilitychange", handleFocusOrVisible);
+
+    return () => {
+      isMounted = false;
+      sub?.unsubscribe();
+      window.clearInterval(intervalId);
+      window.removeEventListener("focus", handleFocusOrVisible);
+      document.removeEventListener("visibilitychange", handleFocusOrVisible);
+    };
+  }, [role, applyBountyRecords, loadBounties]);
 
   React.useEffect(() => {
     if (role !== "OPERATOR") return;

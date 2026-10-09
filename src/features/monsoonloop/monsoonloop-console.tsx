@@ -1,9 +1,7 @@
 "use client";
 
 import * as React from "react";
-import Link from "next/link";
 import {
-  ArrowRight,
   CheckCircle2,
   HardHat,
   PlusCircle,
@@ -136,19 +134,19 @@ export function MonsoonLoopConsole() {
     string | null
   >(null);
 
-  const loadTasks = React.useCallback(async () => {
-    if (role !== "OPERATOR" && role !== "WORKER") return;
-    setIsLoadingTasks(true);
-    setTasksError(null);
-    try {
-      const client = getDataClient();
-      const { data, errors } = await client.models.Task.list({ limit: 100 });
-      assertNoDataErrors(errors, "Unable to load tasks");
-
-      const sorted = [...(data ?? [])].sort((a, b) => {
+  const applyTaskRecords = React.useCallback(
+    (records: NonNullable<Awaited<ReturnType<ReturnType<typeof getDataClient>["models"]["Task"]["list"]>>["data"]>) => {
+      const uniqueById = new Map<string, (typeof records)[number]>();
+      for (const item of records) {
+        if (item && item.id) {
+          uniqueById.set(item.id, item);
+        }
+      }
+      const sorted = Array.from(uniqueById.values()).sort((a, b) => {
         const tA = a.createdAt ? Date.parse(a.createdAt) : 0;
         const tB = b.createdAt ? Date.parse(b.createdAt) : 0;
-        return tB - tA;
+        if (tB !== tA) return tB - tA;
+        return a.id.localeCompare(b.id);
       });
       const mapped = sorted.map((record, index) =>
         mapTaskRecordToMission(record, index)
@@ -159,12 +157,35 @@ export function MonsoonLoopConsole() {
           ? prev
           : mapped[0]?.id ?? null
       );
-    } catch (err) {
-      setTasksError(formatDataError(err, "Unable to load tasks"));
-    } finally {
-      setIsLoadingTasks(false);
-    }
-  }, [role]);
+    },
+    []
+  );
+
+  const loadTasks = React.useCallback(
+    async (options?: { silent?: boolean }) => {
+      if (role !== "OPERATOR" && role !== "WORKER") return;
+      const silent = Boolean(options?.silent);
+      if (!silent) {
+        setIsLoadingTasks(true);
+        setTasksError(null);
+      }
+      try {
+        const client = getDataClient();
+        const { data, errors } = await client.models.Task.list({ limit: 100 });
+        assertNoDataErrors(errors, "Unable to load tasks");
+        applyTaskRecords(data ?? []);
+      } catch (err) {
+        if (!silent) {
+          setTasksError(formatDataError(err, "Unable to load tasks"));
+        }
+      } finally {
+        if (!silent) {
+          setIsLoadingTasks(false);
+        }
+      }
+    },
+    [role, applyTaskRecords]
+  );
 
   const loadWeatherForecasts = React.useCallback(async () => {
     if (role !== "OPERATOR" && role !== "WORKER") return;
@@ -268,6 +289,55 @@ export function MonsoonLoopConsole() {
     void loadTasks();
     void loadWeatherForecasts();
   }, [loadTasks, loadWeatherForecasts]);
+
+  // Real-time synchronization via AppSync observeQuery + lightweight background sync
+  React.useEffect(() => {
+    if (role !== "OPERATOR" && role !== "WORKER") return;
+
+    let isMounted = true;
+    const client = getDataClient();
+
+    let sub: { unsubscribe: () => void } | null = null;
+    try {
+      sub = client.models.Task.observeQuery().subscribe({
+        next: ({ items }) => {
+          if (!isMounted) return;
+          if (items && items.length > 0) {
+            applyTaskRecords(items);
+          }
+          void loadTasks({ silent: true });
+        },
+        error: () => {
+          // Field-level auth can restrict certain subscription payloads; fallback poll handles sync
+        },
+      });
+    } catch {
+      // Fallback interval handles synchronization
+    }
+
+    const intervalId = window.setInterval(() => {
+      if (document.visibilityState === "visible") {
+        void loadTasks({ silent: true });
+      }
+    }, 5000);
+
+    const handleFocusOrVisible = () => {
+      if (document.visibilityState === "visible") {
+        void loadTasks({ silent: true });
+      }
+    };
+
+    window.addEventListener("focus", handleFocusOrVisible);
+    document.addEventListener("visibilitychange", handleFocusOrVisible);
+
+    return () => {
+      isMounted = false;
+      sub?.unsubscribe();
+      window.clearInterval(intervalId);
+      window.removeEventListener("focus", handleFocusOrVisible);
+      document.removeEventListener("visibilitychange", handleFocusOrVisible);
+    };
+  }, [role, applyTaskRecords, loadTasks]);
 
   const handleSelectZone = (nextZoneId: string) => {
     setSelectedZoneId(nextZoneId);
@@ -687,7 +757,7 @@ export function MonsoonLoopConsole() {
   }
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-6">
       {/* ====================================================================
        * MONSOONLOOP HEADER + PRODUCT ROLE CLARITY + SUMMARY
        * ==================================================================== */}
@@ -710,17 +780,7 @@ export function MonsoonLoopConsole() {
             <p className="text-xs sm:text-sm text-muted-foreground max-w-3xl">
               Monitor 72-hour rainfall forecasts across Delhi NCR, prioritize
               vulnerable drainage and recharge corridors, and dispatch municipal
-              engineering crews before storms hit.{" "}
-              <span className="text-foreground/90 font-medium">
-                Looking for ARC-rewarded plastic &amp; waste cleanup bounties?
-              </span>{" "}
-              <Link
-                href="/flood-bounties"
-                className="inline-flex items-center gap-1 font-semibold text-primary hover:underline"
-              >
-                Open Flood &amp; Waste Bounties
-                <ArrowRight className="h-3.5 w-3.5" />
-              </Link>
+              engineering crews before storms hit.
             </p>
           </div>
 
@@ -875,8 +935,8 @@ export function MonsoonLoopConsole() {
           />
 
           {/* 2. When will rainfall peak? + Why is this zone at risk? */}
-          <div className="grid grid-cols-1 gap-6 xl:grid-cols-12">
-            <div className="xl:col-span-7">
+          <div className="grid grid-cols-1 gap-6 xl:grid-cols-12 items-stretch">
+            <div className="xl:col-span-7 flex flex-col">
               <RainPulse
                 selectedZone={selectedZone}
                 weatherSummary={selectedZoneWeather}
@@ -888,7 +948,7 @@ export function MonsoonLoopConsole() {
               />
             </div>
 
-            <div className="xl:col-span-5">
+            <div className="xl:col-span-5 flex flex-col">
               <RiskPanel
                 zone={selectedZone}
                 assessment={riskAssessment}
@@ -898,8 +958,8 @@ export function MonsoonLoopConsole() {
           </div>
 
           {/* 3. Risk & Drain Map + Pre-Storm Action Decisions */}
-          <div className="grid grid-cols-1 gap-6 xl:grid-cols-12">
-            <div className="xl:col-span-7">
+          <div className="grid grid-cols-1 gap-6 xl:grid-cols-12 items-stretch">
+            <div className="xl:col-span-7 flex flex-col">
               <SpongeMap
                 zone={selectedZone}
                 allZones={MONSOONLOOP_ZONES}
@@ -916,7 +976,7 @@ export function MonsoonLoopConsole() {
               />
             </div>
 
-            <div className="xl:col-span-5">
+            <div className="xl:col-span-5 flex flex-col">
               <ActionPlan
                 zone={selectedZone}
                 stage={selectedStage}

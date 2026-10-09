@@ -52,36 +52,110 @@ export function useStubbleExchangeStore() {
   const [isLoading, setIsLoading] = React.useState<boolean>(true);
   const [error, setError] = React.useState<string | null>(null);
 
-  const loadListings = React.useCallback(async () => {
-    if (role !== "FARMER" && role !== "BUYER" && role !== "OPERATOR") {
-      return;
-    }
-    setIsLoading(true);
-    setError(null);
-    try {
-      const client = getDataClient();
-      const { data, errors } = await client.models.StubbleListing.list({
-        limit: 100,
-      });
-      assertNoDataErrors(errors, "Unable to load stubble listings");
-
-      const sorted = [...(data ?? [])].sort((a, b) => {
+  const applyListingRecords = React.useCallback(
+    (incoming: StubbleListingRecord[]) => {
+      const uniqueById = new Map<string, StubbleListingRecord>();
+      for (const item of incoming) {
+        if (item && item.id) {
+          uniqueById.set(item.id, item);
+        }
+      }
+      const sorted = Array.from(uniqueById.values()).sort((a, b) => {
         const tA = a.createdAt ? Date.parse(a.createdAt) : 0;
         const tB = b.createdAt ? Date.parse(b.createdAt) : 0;
-        return tB - tA;
+        if (tB !== tA) return tB - tA;
+        return a.id.localeCompare(b.id);
       });
       prefetchEvidenceSignedUrls(sorted.map((r) => r.proofKey));
       setRecords(sorted);
-    } catch (err) {
-      setError(formatDataError(err, "Unable to load stubble listings"));
-    } finally {
-      setIsLoading(false);
-    }
-  }, [role]);
+    },
+    []
+  );
+
+  const loadListings = React.useCallback(
+    async (options?: { silent?: boolean }) => {
+      if (role !== "FARMER" && role !== "BUYER" && role !== "OPERATOR") {
+        return;
+      }
+      const silent = Boolean(options?.silent);
+      if (!silent) {
+        setIsLoading(true);
+        setError(null);
+      }
+      try {
+        const client = getDataClient();
+        const { data, errors } = await client.models.StubbleListing.list({
+          limit: 100,
+        });
+        assertNoDataErrors(errors, "Unable to load stubble listings");
+        applyListingRecords(data ?? []);
+      } catch (err) {
+        if (!silent) {
+          setError(formatDataError(err, "Unable to load stubble listings"));
+        }
+      } finally {
+        if (!silent) {
+          setIsLoading(false);
+        }
+      }
+    },
+    [role, applyListingRecords]
+  );
 
   React.useEffect(() => {
     void loadListings();
   }, [loadListings]);
+
+  // Real-time synchronization via AppSync observeQuery + lightweight background sync
+  React.useEffect(() => {
+    if (role !== "FARMER" && role !== "BUYER" && role !== "OPERATOR") {
+      return;
+    }
+
+    let isMounted = true;
+    const client = getDataClient();
+
+    let sub: { unsubscribe: () => void } | null = null;
+    try {
+      sub = client.models.StubbleListing.observeQuery().subscribe({
+        next: ({ items }) => {
+          if (!isMounted) return;
+          if (items && items.length > 0) {
+            applyListingRecords(items as StubbleListingRecord[]);
+          }
+          void loadListings({ silent: true });
+        },
+        error: () => {
+          // Field-level auth can restrict certain subscription payloads; fallback poll handles sync
+        },
+      });
+    } catch {
+      // Fallback interval handles synchronization
+    }
+
+    const intervalId = window.setInterval(() => {
+      if (document.visibilityState === "visible") {
+        void loadListings({ silent: true });
+      }
+    }, 5000);
+
+    const handleFocusOrVisible = () => {
+      if (document.visibilityState === "visible") {
+        void loadListings({ silent: true });
+      }
+    };
+
+    window.addEventListener("focus", handleFocusOrVisible);
+    document.addEventListener("visibilitychange", handleFocusOrVisible);
+
+    return () => {
+      isMounted = false;
+      sub?.unsubscribe();
+      window.clearInterval(intervalId);
+      window.removeEventListener("focus", handleFocusOrVisible);
+      document.removeEventListener("visibilitychange", handleFocusOrVisible);
+    };
+  }, [role, applyListingRecords, loadListings]);
 
   const listings = React.useMemo<StubbleExchangeListing[]>(
     () =>

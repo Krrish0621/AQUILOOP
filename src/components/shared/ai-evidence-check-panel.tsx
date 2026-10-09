@@ -12,6 +12,8 @@ import {
 import { Button } from "@/components/ui/button";
 import {
   fetchLatestEvidenceVerification,
+  getDataClient,
+  mapVerificationRecordToUi,
   triggerOperatorEvidenceVerification,
 } from "@/lib/data-client";
 import type { AiEvidenceVerification, AiOverallAssessment } from "@/types";
@@ -133,6 +135,62 @@ export function AiEvidenceCheckPanel({
       cancelled = true;
     };
   }, [resourceId, evidenceFingerprint, evidenceType, hasValidS3Evidence]);
+
+  // Real-time EvidenceVerification updates via AppSync observeQuery + silent background sync
+  React.useEffect(() => {
+    if (!resourceId) return;
+
+    let isMounted = true;
+    const client = getDataClient();
+
+    let sub: { unsubscribe: () => void } | null = null;
+    try {
+      sub = client.models.EvidenceVerification.observeQuery({
+        filter: { resourceId: { eq: resourceId } },
+      }).subscribe({
+        next: ({ items }) => {
+          if (!isMounted || !items || items.length === 0) return;
+          const sorted = [...items]
+            .filter((item): item is NonNullable<typeof item> => Boolean(item))
+            .sort((a, b) =>
+              String(b.evaluatedAt || "").localeCompare(
+                String(a.evaluatedAt || "")
+              )
+            );
+          if (sorted[0]) {
+            setVerification(mapVerificationRecordToUi(sorted[0]));
+            setCheckState("COMPLETED");
+            setErrorMessage(null);
+          }
+        },
+        error: () => {
+          // Fallback interval handles synchronization
+        },
+      });
+    } catch {
+      // Fallback interval handles synchronization
+    }
+
+    const intervalId = window.setInterval(async () => {
+      if (document.visibilityState !== "visible") return;
+      const latest = await fetchLatestEvidenceVerification(resourceId);
+      if (!isMounted || !latest) return;
+      if (
+        !latest.evidenceFingerprint ||
+        latest.evidenceFingerprint === evidenceFingerprint
+      ) {
+        setVerification(latest);
+        setCheckState("COMPLETED");
+        setErrorMessage(null);
+      }
+    }, 6000);
+
+    return () => {
+      isMounted = false;
+      sub?.unsubscribe();
+      window.clearInterval(intervalId);
+    };
+  }, [resourceId, evidenceFingerprint]);
 
   const combinedObservations = React.useMemo(() => {
     if (!verification) return [];

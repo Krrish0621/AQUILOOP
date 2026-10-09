@@ -154,6 +154,7 @@ export function SpongeMap({
         map.on("load", () => {
           if (!cancelled) {
             setMapReady(true);
+            map.resize();
           }
         });
 
@@ -173,6 +174,33 @@ export function SpongeMap({
       }
     };
   }, [allZones]);
+
+  // Ensure the map resizes cleanly when the viewport or container dimensions change
+  React.useEffect(() => {
+    const container = mapContainerRef.current;
+    if (!container) return;
+
+    const handleResize = () => {
+      try {
+        mapRef.current?.resize();
+      } catch {
+        // ignore
+      }
+    };
+
+    const observer =
+      typeof ResizeObserver !== "undefined"
+        ? new ResizeObserver(() => handleResize())
+        : null;
+
+    observer?.observe(container);
+    window.addEventListener("resize", handleResize);
+
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener("resize", handleResize);
+    };
+  }, [mapReady]);
 
   React.useEffect(() => {
     setZoomLevel(zone.zoom);
@@ -219,23 +247,33 @@ export function SpongeMap({
     }
   };
 
-  // Distinct, non-overlapping marker layout slots within the viewport
+  // Distinct, non-overlapping marker layout slots within the safe map band
   const assetSlots = [
-    { left: "26%", top: "30%" },
-    { left: "62%", top: "28%" },
-    { left: "74%", top: "58%" },
-    { left: "24%", top: "66%" },
-    { left: "48%", top: "46%" },
+    { left: "23%", top: "32%" },
+    { left: "66%", top: "28%" },
+    { left: "75%", top: "56%" },
+    { left: "24%", top: "64%" },
+    { left: "48%", top: "48%" },
   ];
 
   const taskSlots = [
-    { left: "42%", top: "24%" },
+    { left: "43%", top: "26%" },
     { left: "54%", top: "68%" },
-    { left: "80%", top: "36%" },
+    { left: "78%", top: "38%" },
   ];
 
+  const activeRiskLevel = riskAssessment?.riskLevel ?? "HIGH";
+  const zoneBoundaryStroke =
+    activeRiskLevel === "CRITICAL"
+      ? "#EF4444"
+      : activeRiskLevel === "HIGH"
+      ? "#F59E0B"
+      : activeRiskLevel === "MODERATE"
+      ? "#38BDF8"
+      : "#10B981";
+
   return (
-    <Card className="overflow-hidden border-primary/30 h-full flex flex-col justify-between">
+    <Card className="overflow-hidden border-primary/30 h-full flex flex-col">
       <CardHeader className="pb-3">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
@@ -246,26 +284,43 @@ export function SpongeMap({
               </CardTitle>
             </div>
             <CardDescription className="mt-1">
-              Where is the problem? Click any marker in {localityLabel} to inspect or dispatch.
+              Click any drain asset or crew task marker in{" "}
+              <strong className="font-medium text-foreground">
+                {localityLabel}
+              </strong>{" "}
+              to inspect status or dispatch.
             </CardDescription>
           </div>
 
           <div className="flex flex-wrap items-center gap-1.5">
             {allZones.map((z) => {
               const loc = getShortZoneLocality(z.name);
+              const isCurrentZone = z.id === zone.id;
+              const zDot =
+                z.baseRiskScore >= 80
+                  ? "bg-danger"
+                  : z.baseRiskScore >= 65
+                  ? "bg-warning"
+                  : "bg-info";
               return (
                 <button
                   key={z.id}
                   type="button"
                   onClick={() => onSelectZone(z.id)}
                   className={cn(
-                    "rounded-lg px-2.5 py-1 text-xs font-semibold border transition-colors",
-                    z.id === zone.id
-                      ? "border-primary bg-primary text-primary-foreground"
-                      : "border-border bg-surface-muted text-muted-foreground hover:text-foreground"
+                    "inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-semibold border transition-all",
+                    isCurrentZone
+                      ? "border-primary bg-primary text-primary-foreground shadow-sm ring-1 ring-primary/50"
+                      : "border-border bg-surface-muted text-muted-foreground hover:text-foreground hover:border-border-strong"
                   )}
                 >
-                  {loc}
+                  <span
+                    className={cn(
+                      "h-2 w-2 rounded-full shrink-0",
+                      isCurrentZone ? "bg-primary-foreground" : zDot
+                    )}
+                  />
+                  <span>{loc}</span>
                 </button>
               );
             })}
@@ -273,18 +328,18 @@ export function SpongeMap({
         </div>
       </CardHeader>
 
-      <CardContent className="space-y-4">
+      <CardContent className="flex-1 flex flex-col justify-between gap-4">
         {/* Geographic Map Canvas */}
-        <div className="relative h-[340px] w-full overflow-hidden rounded-xl border border-border bg-[#0A131F]">
+        <div className="relative h-[360px] w-full overflow-hidden rounded-xl border border-border bg-[#0A131F]">
           <div
             ref={mapContainerRef}
             className="absolute inset-0 h-full w-full"
           />
 
-          {/* Readable Geographic Roads & Drainage Channel Overlay */}
+          {/* Readable Geographic Roads, Risk-Zone Perimeter & Drainage Channel Overlay */}
           <svg
             className="pointer-events-none absolute inset-0 h-full w-full"
-            viewBox="0 0 800 340"
+            viewBox="0 0 800 360"
             fill="none"
             preserveAspectRatio="none"
             aria-hidden="true"
@@ -296,7 +351,7 @@ export function SpongeMap({
               height="105"
               rx="8"
               fill="#111E2E"
-              fillOpacity="0.4"
+              fillOpacity="0.38"
               stroke="#1E324A"
               strokeWidth="1"
             />
@@ -307,7 +362,7 @@ export function SpongeMap({
               height="110"
               rx="8"
               fill="#111E2E"
-              fillOpacity="0.4"
+              fillOpacity="0.38"
               stroke="#1E324A"
               strokeWidth="1"
             />
@@ -318,42 +373,56 @@ export function SpongeMap({
               height="105"
               rx="8"
               fill="#111E2E"
-              fillOpacity="0.4"
+              fillOpacity="0.38"
               stroke="#1E324A"
               strokeWidth="1"
             />
             <rect
               x="75"
-              y="180"
+              y="185"
               width="225"
               height="110"
               rx="8"
               fill="#111E2E"
-              fillOpacity="0.4"
+              fillOpacity="0.38"
               stroke="#1E324A"
               strokeWidth="1"
             />
             <rect
               x="345"
-              y="185"
+              y="190"
               width="240"
               height="105"
               rx="8"
               fill="#111E2E"
-              fillOpacity="0.4"
+              fillOpacity="0.38"
               stroke="#1E324A"
               strokeWidth="1"
             />
 
+            {/* Selected Risk-Zone Highlight Perimeter */}
+            <ellipse
+              cx="415"
+              cy="172"
+              rx="315"
+              ry="122"
+              fill={zoneBoundaryStroke}
+              fillOpacity="0.06"
+              stroke={zoneBoundaryStroke}
+              strokeWidth="1.75"
+              strokeDasharray="8 6"
+              strokeOpacity="0.65"
+            />
+
             {/* Primary Arterial Roads */}
             <path
-              d="M 0 162 L 800 155"
+              d="M 0 168 L 800 160"
               stroke="#2A405C"
               strokeWidth="6"
               strokeOpacity="0.65"
             />
             <path
-              d="M 290 0 L 325 340"
+              d="M 290 0 L 325 360"
               stroke="#2A405C"
               strokeWidth="5"
               strokeOpacity="0.6"
@@ -361,24 +430,26 @@ export function SpongeMap({
 
             {/* Main Stormwater Corridor */}
             <path
-              d="M 20 285 C 200 245, 350 185, 500 165 C 620 150, 710 105, 785 70"
+              d="M 20 295 C 200 255, 350 190, 500 170 C 620 155, 710 110, 785 72"
               stroke="#0EA5E9"
               strokeWidth="5"
-              strokeOpacity="0.42"
+              strokeOpacity="0.45"
             />
             <path
-              d="M 20 285 C 200 245, 350 185, 500 165 C 620 150, 710 105, 785 70"
+              d="M 20 295 C 200 255, 350 190, 500 170 C 620 155, 710 110, 785 72"
               stroke="#38BDF8"
               strokeWidth="1.5"
               strokeDasharray="6 4"
-              strokeOpacity="0.75"
+              strokeOpacity="0.8"
             />
           </svg>
 
-          {/* Top-Left Location + Real Weather Pill */}
-          <div className="absolute left-3 top-3 z-20 flex flex-wrap items-center gap-2 rounded-lg border border-border bg-background/90 px-3 py-1.5 text-xs font-medium text-foreground backdrop-blur-sm">
+          {/* Top-Left Selected Zone + Real Weather Pill */}
+          <div className="absolute left-3 top-3 z-20 flex flex-wrap items-center gap-2 rounded-lg border border-primary/40 bg-background/95 px-3 py-1.5 text-xs font-medium text-foreground shadow-md backdrop-blur-sm">
             <MapPin className="h-3.5 w-3.5 text-primary" />
-            <span>{localityLabel}, Delhi</span>
+            <span className="font-semibold">
+              {localityLabel} ({zone.wardLabel})
+            </span>
             <span className="text-muted-foreground">·</span>
             <span className="font-mono text-[11px] text-primary">
               {(weatherSummary?.peakRainfallMmHr ?? zone.peakIntensityMmHr).toFixed(1)} mm/hr peak
@@ -386,15 +457,27 @@ export function SpongeMap({
             {riskAssessment && (
               <>
                 <span className="text-muted-foreground">·</span>
-                <span className="font-mono text-[10px] font-bold uppercase text-warning">
-                  {riskAssessment.riskLevel}
+                <span
+                  className={cn(
+                    "font-mono text-[10px] font-bold uppercase px-1.5 py-0.5 rounded border",
+                    riskAssessment.riskLevel === "CRITICAL"
+                      ? "border-danger/45 bg-danger/15 text-danger"
+                      : riskAssessment.riskLevel === "HIGH"
+                      ? "border-warning/45 bg-warning/15 text-warning"
+                      : "border-info/45 bg-info/15 text-info"
+                  )}
+                >
+                  {riskAssessment.riskLevel} · {riskAssessment.riskScore}/100
                 </span>
               </>
             )}
           </div>
 
           {/* Top-Right Zoom Controls */}
-          <div className="absolute right-3 top-3 z-20 flex items-center gap-1 rounded-lg border border-border bg-background/90 p-1 backdrop-blur-sm">
+          <div className="absolute right-3 top-3 z-20 flex items-center gap-1 rounded-lg border border-border bg-background/95 p-1 shadow-md backdrop-blur-sm">
+            <span className="px-1.5 font-mono text-[10px] text-muted-foreground">
+              z{zoomLevel.toFixed(1)}
+            </span>
             <button
               type="button"
               onClick={() => handleZoom(0.5)}
@@ -439,9 +522,11 @@ export function SpongeMap({
                   }}
                   style={{ left: pos.left, top: pos.top }}
                   className={cn(
-                    "absolute -translate-x-1/2 -translate-y-1/2 flex flex-col items-start rounded-lg border px-2.5 py-1.5 text-left shadow-lg transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                    "absolute -translate-x-1/2 -translate-y-1/2 flex flex-col items-start rounded-lg border px-2.5 py-1.5 text-left shadow-lg transition-all hover:scale-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                     style.chipClass,
-                    isSelected && "ring-2 ring-white scale-105 z-30 shadow-xl"
+                    isSelected
+                      ? "ring-2 ring-white ring-offset-2 ring-offset-[#0A131F] scale-105 z-30 shadow-xl"
+                      : "opacity-95 hover:opacity-100"
                   )}
                 >
                   <div className="flex items-center gap-1.5">
@@ -456,8 +541,8 @@ export function SpongeMap({
                       {getShortAssetCode(asset.code)}
                     </span>
                   </div>
-                  <span className="mt-0.5 pl-3.5 font-mono text-[9px] font-semibold uppercase opacity-90">
-                    {style.shortStatus}
+                  <span className="mt-0.5 pl-3.5 font-mono text-[9px] font-semibold uppercase opacity-95">
+                    {isSelected ? `${style.shortStatus} · SELECTED` : style.shortStatus}
                   </span>
                 </button>
               );
@@ -479,14 +564,16 @@ export function SpongeMap({
                   }}
                   style={{ left: pos.left, top: pos.top }}
                   className={cn(
-                    "absolute -translate-x-1/2 -translate-y-1/2 flex flex-col items-start rounded-lg border border-blue-400/80 bg-blue-950/90 px-2.5 py-1.5 text-left text-blue-100 shadow-md transition-all hover:scale-105",
-                    isSelected && "ring-2 ring-white scale-105 z-30"
+                    "absolute -translate-x-1/2 -translate-y-1/2 flex flex-col items-start rounded-lg border border-blue-400/80 bg-blue-950/95 px-2.5 py-1.5 text-left text-blue-100 shadow-lg transition-all hover:scale-105",
+                    isSelected
+                      ? "ring-2 ring-white ring-offset-2 ring-offset-[#0A131F] scale-105 z-30 shadow-xl"
+                      : "opacity-95 hover:opacity-100"
                   )}
                 >
                   <div className="flex items-center gap-1">
                     <Target className="h-3 w-3 text-blue-300 shrink-0" />
                     <span className="font-mono text-[11px] font-bold leading-none">
-                      Task #{msn.missionCode}
+                      {msn.missionCode}
                     </span>
                   </div>
                   <span className="mt-0.5 pl-4 font-mono text-[9px] font-semibold uppercase text-blue-200">
@@ -498,7 +585,7 @@ export function SpongeMap({
           </div>
 
           {/* Legend */}
-          <div className="absolute inset-x-3 bottom-3 z-20 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border bg-background/95 px-3.5 py-2 text-xs backdrop-blur-sm">
+          <div className="absolute inset-x-3 bottom-3 z-20 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border bg-background/95 px-3.5 py-2 text-xs shadow-md backdrop-blur-sm">
             <div className="flex flex-wrap items-center gap-4">
               <span className="inline-flex items-center gap-1.5 text-foreground">
                 <span className="h-2.5 w-2.5 rounded-full bg-red-500" />
@@ -527,7 +614,7 @@ export function SpongeMap({
               <div className="space-y-1">
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="font-mono text-xs font-bold text-blue-300">
-                    Task #{selectedMission.missionCode}
+                    {selectedMission.missionCode}
                   </span>
                   <span className="text-xs text-muted-foreground">
                     · {localityLabel}

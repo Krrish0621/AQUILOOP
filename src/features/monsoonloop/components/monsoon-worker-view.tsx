@@ -1,9 +1,7 @@
 "use client";
 
 import * as React from "react";
-import Link from "next/link";
 import {
-  ArrowRight,
   CheckCircle2,
   Clock,
   HardHat,
@@ -11,7 +9,6 @@ import {
   Navigation,
   Play,
   Send,
-  ShieldAlert,
   Users,
   Wrench,
   X,
@@ -159,25 +156,15 @@ export function MonsoonWorkerView({
 
   return (
     <div className="mx-auto max-w-5xl space-y-5">
-      {/* Operational Header + Self-Claimed Bounties CTA */}
-      <div className="flex flex-col gap-4 rounded-xl border border-border bg-surface p-5 sm:flex-row sm:items-center sm:justify-between">
-        <div className="space-y-1">
-          <h2 className="text-base font-bold uppercase tracking-wider text-foreground">
-            Assigned Pre-Storm Tasks
-          </h2>
-          <p className="text-xs text-muted-foreground">
-            Start assigned drain clearance and sluice tasks, upload before/after
-            photos, or switch to self-claimed Flood &amp; Waste Bounties.
-          </p>
-        </div>
-        <Link
-          href="/flood-bounties"
-          className="inline-flex items-center gap-2 rounded-xl border border-primary/40 bg-primary/15 px-4 py-2.5 text-xs font-semibold text-primary transition-colors hover:bg-primary/25 shrink-0"
-        >
-          <ShieldAlert className="h-4 w-4" />
-          <span>Claim Flood &amp; Waste Bounties</span>
-          <ArrowRight className="h-3.5 w-3.5" />
-        </Link>
+      {/* Operational Header */}
+      <div className="flex flex-col gap-2 rounded-xl border border-border bg-surface p-5">
+        <h2 className="text-base font-bold uppercase tracking-wider text-foreground">
+          Assigned Pre-Storm Tasks
+        </h2>
+        <p className="text-xs text-muted-foreground">
+          Start assigned drain clearance and sluice tasks and upload before/after
+          field photos for operator verification.
+        </p>
       </div>
 
       {/* Status Summary & Filter Bar */}

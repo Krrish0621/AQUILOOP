@@ -44,3 +44,8 @@ amplify_outputs.json
 amplify_outputs*.json
 .amplify/
 cdk.out/
+
+# local internal notes & scratch scripts
+Project Structure.txt
+scripts/tmp-*
+
