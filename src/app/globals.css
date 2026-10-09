@@ -1,0 +1,145 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@import "maplibre-gl/dist/maplibre-gl.css";
+
+@layer base {
+  :root {
+    --font-sans: "Plus Jakarta Sans", -apple-system, BlinkMacSystemFont,
+      "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco,
+      Consolas, monospace;
+
+    /* AQUILOOP Hydrological Operations Design System (Dark-First Precision Palette) */
+    --background: 212 48% 5%;          /* #070C13 — Deep Abyssal Slate */
+    --foreground: 204 33% 96%;         /* #EFF5F8 — Crisp Atmospheric White */
+
+    --surface: 213 44% 8.5%;           /* #0C1520 — Primary Operational Panel */
+    --surface-muted: 213 38% 11.5%;    /* #121D2B — Secondary / Recessed Surface */
+    --surface-elevated: 212 36% 14%;   /* #172434 — Elevated Interactive Surface */
+    --surface-interactive: 210 38% 17%;/* #1B2C3F — Hover / Active Surface */
+
+    --card: 213 44% 8.5%;
+    --card-foreground: 204 33% 96%;
+
+    --popover: 213 44% 9%;
+    --popover-foreground: 204 33% 96%;
+
+    /* Primary: Hydrological Cyan-Teal */
+    --primary: 192 91% 43%;            /* #0A9EC8 — Active Water Intelligence */
+    --primary-foreground: 212 50% 6%;
+    --primary-muted: 192 65% 24%;
+
+    /* Secondary: Aquifer Recharge Emerald-Teal */
+    --secondary: 162 63% 38%;          /* #249E78 — Ecological Resilience */
+    --secondary-foreground: 160 40% 98%;
+
+    --muted: 213 32% 14%;
+    --muted-foreground: 210 18% 64%;   /* #91A3B5 — Subtext & Labels */
+
+    --accent: 196 45% 16%;
+    --accent-foreground: 192 90% 72%;
+
+    /* Semantic Status Colors */
+    --success: 158 68% 42%;            /* #22B47E — Verified Recharge / Normal */
+    --success-foreground: 160 50% 6%;
+
+    --warning: 38 92% 52%;             /* #F59E0B — Elevated Risk / Prepare */
+    --warning-foreground: 38 80% 7%;
+
+    --danger: 350 86% 60%;             /* #F0425F — Urgent Action / High Flood Risk */
+    --danger-foreground: 350 40% 98%;
+
+    --info: 199 89% 54%;               /* #22A7F0 — Telemetry & Forecast Signal */
+    --info-foreground: 205 60% 8%;
+
+    /* Borders & Focus */
+    --border: 212 32% 16%;             /* #1C2938 — Precision Structural Border */
+    --border-strong: 208 32% 24%;      /* #293D52 — Highlighted Panel Border */
+    --border-subtle: 213 34% 12%;      /* #141E2B — Hairline Divider */
+
+    --input: 212 32% 16%;
+    --ring: 192 91% 43%;
+
+    /* Data Visualization Tokens */
+    --chart-rainfall: 192 91% 48%;
+    --chart-recharge: 158 68% 44%;
+    --chart-risk: 38 92% 54%;
+    --chart-baseline: 212 24% 38%;
+
+    /* Radius Scale */
+    --radius: 0.5rem;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  html {
+    color-scheme: dark;
+    font-family: var(--font-sans), -apple-system, BlinkMacSystemFont, "Segoe UI",
+      Roboto, "Helvetica Neue", Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  body {
+    @apply bg-background text-foreground font-sans selection:bg-primary/25 selection:text-foreground;
+    font-family: var(--font-sans), -apple-system, BlinkMacSystemFont, "Segoe UI",
+      Roboto, "Helvetica Neue", Arial, sans-serif;
+    overflow-x: hidden;
+  }
+
+  button,
+  input,
+  select,
+  textarea {
+    font-family: inherit;
+  }
+
+  /* Accessible keyboard focus treatment */
+  :focus-visible {
+    @apply outline-none ring-2 ring-ring ring-offset-2 ring-offset-background;
+  }
+}
+
+@layer utilities {
+  .bg-telemetry-grid {
+    background-image:
+      linear-gradient(to right, hsl(var(--border) / 0.35) 1px, transparent 1px),
+      linear-gradient(to bottom, hsl(var(--border) / 0.35) 1px, transparent 1px);
+    background-size: 32px 32px;
+  }
+
+  .bg-radial-atmosphere {
+    background: radial-gradient(
+      120% 80% at 50% 0%,
+      hsl(var(--primary) / 0.07) 0%,
+      hsl(var(--secondary) / 0.03) 40%,
+      transparent 80%
+    );
+  }
+
+  .tabular-nums {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: hsl(var(--background));
+}
+
+::-webkit-scrollbar-thumb {
+  background: hsl(var(--border-strong));
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: hsl(var(--muted-foreground) / 0.6);
+}
