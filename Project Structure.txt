@@ -510,3 +510,46 @@ FINAL TARGETED FUNCTIONAL FIXES BEFORE DEPLOYMENT
 - `npm run typecheck`: Passed (0 errors).
 - `npm run build`: Passed (0 errors).
 ==================================================
+
+==================================================
+MILESTONE #21 — FINAL GITHUB + AWS AMPLIFY HOSTING PRODUCTION DEPLOYMENT
+==================================================
+1. DEPLOYMENT IDENTIFIERS & URLS
+- **GitHub Repository URL**: `https://github.com/Krrish0621/AQUILOOP`
+- **Amplify App ID**: `d34nn6kyvzewoi` (`AQUILOOP`)
+- **Deployed Branch**: `main` (`PRODUCTION` stage, `WEB_COMPUTE` Next.js SSR)
+- **Public HTTPS URL**: `https://main.d34nn6kyvzewoi.amplifyapp.com`
+- **AWS Region**: `ap-southeast-2` (Sydney)
+- **Build & Deployment Status**: `SUCCEED` (`BUILD:SUCCEED | DEPLOY:SUCCEED | VERIFY:SUCCEED`)
+
+2. DEPLOYED AWS RESOURCES (`ap-southeast-2`)
+- **AWS Amplify Hosting App**: `d34nn6kyvzewoi` (`AQUILOOP`, platform `WEB_COMPUTE`, IAM service/compute role `aquiloop-amplify-hosting-role`)
+- **Amazon Cognito User Pool (Hosted Production)**: `ap-southeast-2_WB8NDxo2w` (Identity Pool: `ap-southeast-2:23ccdfdb-c385-491d-a0dd-a32f963702e6`, Groups: `OPERATOR`, `WORKER`, `FARMER`, `BUYER`)
+- **AWS AppSync GraphQL API (Hosted Production)**: `https://hqublyuk45cotn4svhzf2t3sdy.appsync-api.ap-southeast-2.amazonaws.com/graphql` (API ID: `xjp4si6debafnmtnvdbvb6gh24`)
+- **Amazon DynamoDB Tables (Hosted Production)**:
+  - `Task-xjp4si6debafnmtnvdbvb6gh24-NONE` (7 seeded pre-storm tasks)
+  - `Bounty-xjp4si6debafnmtnvdbvb6gh24-NONE` (5 seeded flood & waste bounties)
+  - `StubbleListing-xjp4si6debafnmtnvdbvb6gh24-NONE` (5 seeded stubble exchange listings)
+  - `UserProfile-xjp4si6debafnmtnvdbvb6gh24-NONE` (4 demo user profiles)
+  - `WeatherForecast-xjp4si6debafnmtnvdbvb6gh24-NONE` (576 hourly Open-Meteo records across 8 locations)
+  - `EvidenceVerification-xjp4si6debafnmtnvdbvb6gh24-NONE` (Amazon Rekognition evidence analysis records)
+- **Amazon S3 Private Evidence Bucket (Hosted Production)**: `amplify-d34nn6kyvzewoi-ma-aquiloopevidencestorageb-crcrtps6l00f` (private prefixes `bounties/*`, `stubble/*`, `tasks/*` with role-scoped IAM policies and presigned URL access)
+- **AWS Lambda Functions & EventBridge Schedule (Hosted Production)**:
+  - `weather-ingest`: Open-Meteo hourly forecast ingestion Lambda + EventBridge 6-hour schedule + `refreshWeatherForecast` AppSync mutation
+  - `verify-evidence`: Amazon Rekognition (`DetectLabels` + `IMAGE_PROPERTIES`) S3 evidence verification Lambda + `verifyEvidence` AppSync mutation
+- **Preserved Local Sandbox Resources**: Local sandbox (`amplify-aquiloop-KrrishCh-sandbox-67cf7fc924`, Cognito `ap-southeast-2_KeMxKqPnR`, AppSync `6d3ozvmhmvfpxlaayhb66d4oli`) remains intact and untouched.
+
+3. LIVE PUBLIC URL VERIFICATION SUMMARY (`https://main.d34nn6kyvzewoi.amplifyapp.com`)
+- [PASS] 1. First visit opens login screen cleanly without needing refresh (`HTTP 200`, immediate SSR + client hydration).
+- [PASS] 2. Operator, Worker, Farmer, and Buyer demo logins work (`operator.demo@aquiloop.test`, `worker.demo@aquiloop.test`, `farmer.demo@aquiloop.test`, `buyer.demo@aquiloop.test`) and open directly into their respective operational workspaces.
+- [PASS] 3. Sign out and session persistence across full page reloads work on the live HTTPS domain.
+- [PASS] 4. Operator task creation and crew dispatch (`PENDING` -> `ASSIGNED`) persist to hosted DynamoDB.
+- [PASS] 5. Worker task execution (`ASSIGNED` -> `IN_PROGRESS` -> `SUBMITTED`) and bounty claim/submission (`OPEN` -> `CLAIMED` -> `SUBMITTED`) persist to hosted DynamoDB.
+- [PASS] 6. Private S3 image upload (`bounties/*`, `stubble/*`) and presigned URL image rendering work (`HTTP 200`, `naturalWidth > 0`).
+- [PASS] 7. Farmer stubble listing creation (`OPEN`) persists to hosted DynamoDB.
+- [PASS] 8. Buyer pickup acceptance (`OPEN` -> `ACCEPTED`) and S3 pickup proof upload (`ACCEPTED` -> `PENDING_VERIFICATION`) work.
+- [PASS] 9. Operator bounty and stubble pickup verification (`VERIFIED`) work.
+- [PASS] 10. MONSOONLOOP live weather forecast load and `refreshWeatherForecast` work (576 hourly records across 8 locations).
+- [PASS] 11. Amazon Rekognition image analysis (`verifyEvidence` -> `amazon.rekognition.detect-labels`) works with clean `AI Image Analysis` UI copy.
+- [PASS] 12. Mobile layout (`390x844`) renders cleanly with zero horizontal overflow (`scrollWidth: 390px <= clientWidth: 390px`).
+==================================================
