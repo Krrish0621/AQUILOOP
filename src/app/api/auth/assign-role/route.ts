@@ -115,7 +115,9 @@ async function callCognitoAdminApi(
       (data.message as string) ||
       (data.__type as string) ||
       `Cognito Admin API error (${response.status})`;
-    throw new Error(errMsg);
+    const error = new Error(errMsg) as Error & { code?: string };
+    error.code = typeof data.__type === "string" ? data.__type : undefined;
+    throw error;
   }
 
   return data;
@@ -125,7 +127,9 @@ async function callCognitoAdminApi(
  * POST /api/auth/assign-role
  *
  * Securely assigns a newly registered user to their selected non-privileged
- * Cognito User Pool group (`WORKER`, `FARMER`, or `BUYER`) upon initial sign-in.
+ * Cognito User Pool group (`WORKER`, `FARMER`, or `BUYER`) upon initial sign-in,
+ * or checks whether an existing signup email is `UNCONFIRMED` vs `CONFIRMED`
+ * (`action: "CHECK_SIGNUP_STATUS"`).
  *
  * Security invariants:
  * 1. NEVER allows self-assigning `OPERATOR` (`403 Forbidden`).
@@ -134,6 +138,60 @@ async function callCognitoAdminApi(
  */
 export async function POST(request: Request) {
   try {
+    const body = (await request.json().catch(() => ({}))) as {
+      role?: string;
+      action?: string;
+      email?: string;
+    };
+
+    const config = readAmplifyAuthConfig();
+    if (!config) {
+      return NextResponse.json(
+        { error: "Cognito User Pool configuration not found in amplify_outputs.json." },
+        { status: 500 }
+      );
+    }
+
+    const { userPoolId, region } = config;
+
+    // Optional lightweight check to distinguish UNCONFIRMED vs CONFIRMED accounts
+    // when SignUp returns UsernameExistsException or when Resend Code is requested.
+    if (body.action === "CHECK_SIGNUP_STATUS") {
+      const cleanEmail = body.email?.trim().toLowerCase();
+      if (!cleanEmail) {
+        return NextResponse.json(
+          { error: "Email address is required." },
+          { status: 400 }
+        );
+      }
+
+      try {
+        const userData = await callCognitoAdminApi(region, "AdminGetUser", {
+          UserPoolId: userPoolId,
+          Username: cleanEmail,
+        });
+        const userStatus =
+          typeof userData.UserStatus === "string"
+            ? userData.UserStatus
+            : "UNKNOWN";
+        return NextResponse.json({ userStatus });
+      } catch (err) {
+        const errCode = (err as { code?: string })?.code ?? "";
+        const errMessage = err instanceof Error ? err.message : String(err);
+        if (
+          errCode.includes("UserNotFoundException") ||
+          errMessage.toLowerCase().includes("user does not exist")
+        ) {
+          return NextResponse.json({ userStatus: "NOT_FOUND" });
+        }
+        console.warn("[AQUILOOP Auth API] CHECK_SIGNUP_STATUS failed:", {
+          code: errCode,
+          message: errMessage,
+        });
+        return NextResponse.json({ userStatus: "UNKNOWN" });
+      }
+    }
+
     const authHeader = request.headers.get("authorization");
     if (!authHeader || !authHeader.startsWith("Bearer ")) {
       return NextResponse.json(
@@ -150,9 +208,6 @@ export async function POST(request: Request) {
       );
     }
 
-    const body = (await request.json().catch(() => ({}))) as {
-      role?: string;
-    };
     const requestedRole = body.role?.toUpperCase();
 
     if (requestedRole === "OPERATOR") {
@@ -176,16 +231,6 @@ export async function POST(request: Request) {
         { status: 400 }
       );
     }
-
-    const config = readAmplifyAuthConfig();
-    if (!config) {
-      return NextResponse.json(
-        { error: "Cognito User Pool configuration not found in amplify_outputs.json." },
-        { status: 500 }
-      );
-    }
-
-    const { userPoolId, region } = config;
 
     // 1. Verify the caller's AccessToken directly against Amazon Cognito GetUser
     const getUserResp = await fetch(
@@ -259,6 +304,8 @@ export async function POST(request: Request) {
   } catch (err) {
     const message =
       err instanceof Error ? err.message : "Failed to assign Cognito role group.";
+    console.error("[AQUILOOP Auth API] Role assignment error:", message);
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }
+

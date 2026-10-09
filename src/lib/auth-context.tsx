@@ -102,6 +102,55 @@ function resolveAuthoritativeRole(groups: string[]): AquiloopRole | null {
   return null;
 }
 
+const PENDING_ROLE_STORAGE_PREFIX = "aquiloop_pending_signup_role:";
+
+export function savePendingSignupRole(
+  email: string,
+  role: PublicSignupRole
+): void {
+  if (typeof window === "undefined") return;
+  const cleanEmail = email.trim().toLowerCase();
+  if (!cleanEmail) return;
+  try {
+    window.localStorage.setItem(
+      `${PENDING_ROLE_STORAGE_PREFIX}${cleanEmail}`,
+      role
+    );
+  } catch {
+    // Ignore localStorage quota/privacy errors
+  }
+}
+
+export function getPendingSignupRole(email: string): PublicSignupRole | null {
+  if (typeof window === "undefined") return null;
+  const cleanEmail = email.trim().toLowerCase();
+  if (!cleanEmail) return null;
+  try {
+    const raw = window.localStorage.getItem(
+      `${PENDING_ROLE_STORAGE_PREFIX}${cleanEmail}`
+    );
+    if (raw === "WORKER" || raw === "FARMER" || raw === "BUYER") {
+      return raw;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+export function clearPendingSignupRole(email: string): void {
+  if (typeof window === "undefined") return;
+  const cleanEmail = email.trim().toLowerCase();
+  if (!cleanEmail) return;
+  try {
+    window.localStorage.removeItem(
+      `${PENDING_ROLE_STORAGE_PREFIX}${cleanEmail}`
+    );
+  } catch {
+    // Ignore localStorage errors
+  }
+}
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = React.useState<AuthenticatedAquiloopUser | null>(
     null
@@ -130,6 +179,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           return null;
         }
 
+        const emailClaim =
+          (idToken.payload?.email as string | undefined) ??
+          currentUser.signInDetails?.loginId ??
+          currentUser.username;
+
         let groups = Array.from(
           new Set([
             ...extractGroupsFromPayload(
@@ -146,14 +200,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         // If a newly registered user has no Cognito group yet, request server-side
         // assignment to their non-privileged onboarding role (WORKER | FARMER | BUYER),
         // then force-refresh the Cognito JWT session so cognito:groups is authoritative.
-        if (!resolvedRole && pendingSignupRole) {
+        const roleToAssign =
+          pendingSignupRole ?? getPendingSignupRole(emailClaim) ?? "WORKER";
+
+        if (!resolvedRole && roleToAssign) {
           const assignResp = await fetch("/api/auth/assign-role", {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
               Authorization: `Bearer ${accessToken.toString()}`,
             },
-            body: JSON.stringify({ role: pendingSignupRole }),
+            body: JSON.stringify({ role: roleToAssign }),
           });
 
           if (assignResp.ok) {
@@ -174,10 +231,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           }
         }
 
-        const emailClaim =
-          (idToken.payload?.email as string | undefined) ??
-          currentUser.signInDetails?.loginId ??
-          currentUser.username;
+        if (resolvedRole) {
+          clearPendingSignupRole(emailClaim);
+        }
 
         setUser({
           userId: currentUser.userId,
@@ -200,6 +256,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
         return resolvedRole;
       } catch {
+
         setUser(null);
         setRole(null);
         setIsAuthenticated(false);

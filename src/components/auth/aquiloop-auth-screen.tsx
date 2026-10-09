@@ -27,8 +27,15 @@ import {
   AquiloopRole,
   PublicSignupRole,
   ROLE_META,
+  savePendingSignupRole,
+  getPendingSignupRole,
 } from "@/lib/auth-context";
-import { formatCognitoError } from "@/lib/auth-errors";
+import {
+  formatCognitoError,
+  logAuthDiagnostic,
+  validateSignupEmail,
+  validateSignupPassword,
+} from "@/lib/auth-errors";
 
 type AuthMode = "SIGN_IN" | "SIGN_UP" | "CONFIRM_SIGN_UP";
 
@@ -96,6 +103,36 @@ const FEATURE_CARDS = [
   },
 ];
 
+const RESEND_COOLDOWN_SECONDS = 30;
+
+async function checkAccountSignupStatus(
+  email: string
+): Promise<"UNCONFIRMED" | "CONFIRMED" | "NOT_FOUND" | "UNKNOWN"> {
+  try {
+    const res = await fetch("/api/auth/assign-role", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: "CHECK_SIGNUP_STATUS",
+        email: email.trim().toLowerCase(),
+      }),
+      cache: "no-store",
+    });
+    if (!res.ok) return "UNKNOWN";
+    const data = (await res.json()) as { userStatus?: string };
+    if (
+      data.userStatus === "UNCONFIRMED" ||
+      data.userStatus === "CONFIRMED" ||
+      data.userStatus === "NOT_FOUND"
+    ) {
+      return data.userStatus;
+    }
+    return "UNKNOWN";
+  } catch {
+    return "UNKNOWN";
+  }
+}
+
 export function AquiloopAuthScreen() {
   const router = useRouter();
   const { refreshSession } = useCurrentRole();
@@ -107,8 +144,13 @@ export function AquiloopAuthScreen() {
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [confirmationCode, setConfirmationCode] = useState("");
+  const [deliveryDestination, setDeliveryDestination] = useState<string | null>(
+    null
+  );
 
   const [submitting, setSubmitting] = useState(false);
+  const [resending, setResending] = useState(false);
+  const [resendCooldown, setResendCooldown] = useState(0);
   const [localDemoPassword, setLocalDemoPassword] = useState<string>("");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [infoMessage, setInfoMessage] = useState<string | null>(null);
@@ -130,10 +172,24 @@ export function AquiloopAuthScreen() {
     };
   }, []);
 
+  useEffect(() => {
+    if (resendCooldown <= 0) return;
+    const timer = window.setInterval(() => {
+      setResendCooldown((prev) => (prev > 1 ? prev - 1 : 0));
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [resendCooldown]);
+
   const switchMode = (nextMode: AuthMode) => {
     setMode(nextMode);
     setErrorMessage(null);
     setInfoMessage(null);
+    if (nextMode === "CONFIRM_SIGN_UP" && email.trim()) {
+      const storedRole = getPendingSignupRole(email);
+      if (storedRole) {
+        setSignupRole(storedRole);
+      }
+    }
   };
 
   const executeSignInAndNavigate = async (
@@ -143,6 +199,8 @@ export function AquiloopAuthScreen() {
     fallbackRole?: AquiloopRole
   ) => {
     const cleanEmail = targetEmail.trim().toLowerCase();
+    const effectiveSignupRole =
+      pendingSignupRole ?? getPendingSignupRole(cleanEmail) ?? undefined;
     try {
       const result = await signIn({
         username: cleanEmail,
@@ -150,16 +208,19 @@ export function AquiloopAuthScreen() {
       });
 
       if (result.nextStep?.signInStep === "CONFIRM_SIGN_UP") {
+        if (effectiveSignupRole) {
+          setSignupRole(effectiveSignupRole);
+        }
         setMode("CONFIRM_SIGN_UP");
         setInfoMessage(
-          "Enter the 6-digit verification code sent to your email."
+          `Your email (${cleanEmail}) is not verified yet. Enter your 6-digit verification code below, or click 'Resend verification code' to request a new one.`
         );
         return;
       }
 
       if (result.isSignedIn) {
-        const resolvedRole = await refreshSession(pendingSignupRole);
-        const activeRole = resolvedRole ?? fallbackRole;
+        const resolvedRole = await refreshSession(effectiveSignupRole);
+        const activeRole = resolvedRole ?? fallbackRole ?? effectiveSignupRole;
         if (activeRole && ROLE_META[activeRole]) {
           router.push(ROLE_META[activeRole].primaryHref);
         }
@@ -175,9 +236,20 @@ export function AquiloopAuthScreen() {
           username: cleanEmail,
           password: targetPassword,
         });
+        if (retryResult.nextStep?.signInStep === "CONFIRM_SIGN_UP") {
+          if (effectiveSignupRole) {
+            setSignupRole(effectiveSignupRole);
+          }
+          setMode("CONFIRM_SIGN_UP");
+          setInfoMessage(
+            `Your email (${cleanEmail}) is not verified yet. Enter your 6-digit verification code below, or click 'Resend verification code' to request a new one.`
+          );
+          return;
+        }
         if (retryResult.isSignedIn) {
-          const resolvedRole = await refreshSession(pendingSignupRole);
-          const activeRole = resolvedRole ?? fallbackRole;
+          const resolvedRole = await refreshSession(effectiveSignupRole);
+          const activeRole =
+            resolvedRole ?? fallbackRole ?? effectiveSignupRole;
           if (activeRole && ROLE_META[activeRole]) {
             router.push(ROLE_META[activeRole].primaryHref);
           }
@@ -226,6 +298,10 @@ export function AquiloopAuthScreen() {
         option.role
       );
     } catch (err: unknown) {
+      logAuthDiagnostic("demoSignIn", err, {
+        email: option.demoEmail,
+        role: option.role,
+      });
       setErrorMessage(formatCognitoError(err));
     } finally {
       setSubmitting(false);
@@ -248,15 +324,20 @@ export function AquiloopAuthScreen() {
       await executeSignInAndNavigate(
         cleanEmail,
         password,
-        undefined,
+        getPendingSignupRole(cleanEmail) ?? undefined,
         selectedRole ?? undefined
       );
     } catch (err: unknown) {
+      logAuthDiagnostic("signIn", err, { email: cleanEmail });
       const errName = (err as { name?: string })?.name;
       if (errName === "UserNotConfirmedException") {
+        const storedRole = getPendingSignupRole(cleanEmail);
+        if (storedRole) {
+          setSignupRole(storedRole);
+        }
         setMode("CONFIRM_SIGN_UP");
         setInfoMessage(
-          "Your email is not verified yet. Enter your verification code below."
+          `Your email (${cleanEmail}) is not verified yet. Enter your 6-digit verification code below, or click 'Resend verification code' to request a new one.`
         );
       } else {
         setErrorMessage(formatCognitoError(err));
@@ -272,15 +353,15 @@ export function AquiloopAuthScreen() {
     setInfoMessage(null);
 
     const cleanEmail = email.trim().toLowerCase();
-    if (!cleanEmail) {
-      setErrorMessage("Please enter a valid email address.");
+    const emailError = validateSignupEmail(cleanEmail);
+    if (emailError) {
+      setErrorMessage(emailError);
       return;
     }
 
-    if (password.length < 8) {
-      setErrorMessage(
-        "Use 8+ characters with uppercase, lowercase, a number, and a symbol."
-      );
+    const passwordError = validateSignupPassword(password);
+    if (passwordError) {
+      setErrorMessage(passwordError);
       return;
     }
 
@@ -289,6 +370,7 @@ export function AquiloopAuthScreen() {
       return;
     }
 
+    savePendingSignupRole(cleanEmail, signupRole);
     setSubmitting(true);
     try {
       const { nextStep, isSignUpComplete } = await signUp({
@@ -297,16 +379,27 @@ export function AquiloopAuthScreen() {
         options: {
           userAttributes: {
             email: cleanEmail,
-            "custom:intendedRole": signupRole,
           },
         },
       });
 
       if (nextStep.signUpStep === "CONFIRM_SIGN_UP" && !isSignUpComplete) {
+        const destination = nextStep.codeDeliveryDetails?.destination ?? null;
+        const deliveryMedium = nextStep.codeDeliveryDetails?.deliveryMedium;
+        setDeliveryDestination(destination);
         setMode("CONFIRM_SIGN_UP");
-        setInfoMessage(
-          `Verification code sent to ${cleanEmail}. Enter the 6-digit code below.`
-        );
+
+        if (destination && (!deliveryMedium || deliveryMedium === "EMAIL")) {
+          setResendCooldown(RESEND_COOLDOWN_SECONDS);
+          setInfoMessage(
+            `Verification code sent to ${cleanEmail} (${destination}). Enter the 6-digit code below.`
+          );
+        } else {
+          setResendCooldown(0);
+          setErrorMessage(
+            `Account created for ${cleanEmail}, but verification email delivery could not be confirmed. Click 'Resend verification code' below to request a code.`
+          );
+        }
         return;
       }
 
@@ -319,6 +412,28 @@ export function AquiloopAuthScreen() {
         );
       }
     } catch (err: unknown) {
+      logAuthDiagnostic("signUp", err, {
+        email: cleanEmail,
+        role: signupRole,
+      });
+      const errName = (err as { name?: string })?.name;
+
+      if (errName === "UsernameExistsException") {
+        const status = await checkAccountSignupStatus(cleanEmail);
+        if (status === "UNCONFIRMED") {
+          setResendCooldown(0);
+          setMode("CONFIRM_SIGN_UP");
+          setInfoMessage(
+            `An account for ${cleanEmail} already exists and is awaiting email verification. Click 'Resend verification code' below to receive a new 6-digit OTP, or enter your existing code.`
+          );
+          return;
+        }
+        setErrorMessage(
+          "An account with this email already exists. Please sign in instead."
+        );
+        return;
+      }
+
       setErrorMessage(formatCognitoError(err));
     } finally {
       setSubmitting(false);
@@ -333,10 +448,19 @@ export function AquiloopAuthScreen() {
     const cleanEmail = email.trim().toLowerCase();
     const cleanCode = confirmationCode.trim();
 
-    if (!cleanEmail || !cleanCode) {
-      setErrorMessage("Please enter your email and verification code.");
+    const emailError = validateSignupEmail(cleanEmail);
+    if (emailError) {
+      setErrorMessage(emailError);
       return;
     }
+
+    if (!cleanCode || !/^\d{6}$/.test(cleanCode)) {
+      setErrorMessage("Please enter a valid 6-digit verification code.");
+      return;
+    }
+
+    const effectiveRole = getPendingSignupRole(cleanEmail) ?? signupRole;
+    savePendingSignupRole(cleanEmail, effectiveRole);
 
     setSubmitting(true);
     try {
@@ -350,8 +474,8 @@ export function AquiloopAuthScreen() {
           await executeSignInAndNavigate(
             cleanEmail,
             password,
-            signupRole,
-            signupRole
+            effectiveRole,
+            effectiveRole
           );
           return;
         }
@@ -359,25 +483,74 @@ export function AquiloopAuthScreen() {
         setInfoMessage("Email verified. You can now sign in.");
       }
     } catch (err: unknown) {
-      setErrorMessage(formatCognitoError(err));
+      logAuthDiagnostic("confirmSignUp", err, {
+        email: cleanEmail,
+        role: effectiveRole,
+      });
+      const errMsg = formatCognitoError(err);
+      if (errMsg.toLowerCase().includes("already verified")) {
+        setMode("SIGN_IN");
+        setInfoMessage(errMsg);
+      } else {
+        setErrorMessage(errMsg);
+      }
     } finally {
       setSubmitting(false);
     }
   };
 
   const handleResendCode = async () => {
+    if (resending || resendCooldown > 0) return;
     setErrorMessage(null);
     setInfoMessage(null);
+
     const cleanEmail = email.trim().toLowerCase();
-    if (!cleanEmail) {
-      setErrorMessage("Please enter your email address first.");
+    const emailError = validateSignupEmail(cleanEmail);
+    if (emailError) {
+      setErrorMessage(emailError);
       return;
     }
+
+    savePendingSignupRole(cleanEmail, signupRole);
+    setResending(true);
     try {
-      await resendSignUpCode({ username: cleanEmail });
-      setInfoMessage(`A new verification code has been sent to ${cleanEmail}.`);
+      const status = await checkAccountSignupStatus(cleanEmail);
+      if (status === "CONFIRMED") {
+        setMode("SIGN_IN");
+        setInfoMessage(
+          `This email (${cleanEmail}) is already verified. Please sign in with your password.`
+        );
+        return;
+      }
+      if (status === "NOT_FOUND") {
+        setErrorMessage(
+          `No unverified account was found for ${cleanEmail}. Please create an account first.`
+        );
+        return;
+      }
+
+      const deliveryDetails = await resendSignUpCode({ username: cleanEmail });
+      const destination = deliveryDetails?.destination ?? null;
+      setDeliveryDestination(destination);
+
+      if (destination) {
+        setResendCooldown(RESEND_COOLDOWN_SECONDS);
+        setInfoMessage(
+          `A new 6-digit verification code has been sent to ${cleanEmail} (${destination}).`
+        );
+      } else {
+        setErrorMessage(
+          `Could not confirm verification code delivery to ${cleanEmail}. Please try again.`
+        );
+      }
     } catch (err: unknown) {
+      logAuthDiagnostic("resendSignUpCode", err, {
+        email: cleanEmail,
+        role: signupRole,
+      });
       setErrorMessage(formatCognitoError(err));
+    } finally {
+      setResending(false);
     }
   };
 
@@ -644,7 +817,7 @@ export function AquiloopAuthScreen() {
 
             {/* SIGN UP FORM */}
             {mode === "SIGN_UP" && (
-              <form onSubmit={handleSignUp} className="space-y-4">
+              <form onSubmit={handleSignUp} noValidate className="space-y-4">
                 <div className="space-y-1.5">
                   <label className="block text-xs font-medium text-foreground">
                     Role
@@ -655,6 +828,7 @@ export function AquiloopAuthScreen() {
                         <button
                           key={r}
                           type="button"
+                          data-testid={`signup-role-${r.toLowerCase()}`}
                           onClick={() => setSignupRole(r)}
                           className={`py-2 px-2 rounded-lg text-xs font-semibold transition-all ${
                             signupRole === r
@@ -748,16 +922,72 @@ export function AquiloopAuthScreen() {
                     </>
                   )}
                 </button>
+
+                <div className="pt-1 text-center">
+                  <button
+                    type="button"
+                    data-testid="goto-verify-email"
+                    onClick={() => switchMode("CONFIRM_SIGN_UP")}
+                    className="text-xs text-primary hover:underline font-medium"
+                  >
+                    Already have an unverified account? Verify email or resend
+                    code
+                  </button>
+                </div>
               </form>
             )}
 
             {/* CONFIRM SIGN UP FORM */}
             {mode === "CONFIRM_SIGN_UP" && (
-              <form onSubmit={handleConfirmSignUp} className="space-y-4">
+              <form
+                onSubmit={handleConfirmSignUp}
+                noValidate
+                className="space-y-4"
+              >
                 <div className="space-y-1.5">
                   <label className="block text-xs font-medium text-foreground">
-                    Email
+                    Account Role
                   </label>
+                  <div className="grid grid-cols-3 gap-1.5 p-1 rounded-xl bg-background border border-border">
+                    {(["WORKER", "FARMER", "BUYER"] as PublicSignupRole[]).map(
+                      (r) => (
+                        <button
+                          key={r}
+                          type="button"
+                          onClick={() => {
+                            setSignupRole(r);
+                            if (email.trim()) {
+                              savePendingSignupRole(email, r);
+                            }
+                          }}
+                          className={`py-1.5 px-2 rounded-lg text-xs font-semibold transition-all ${
+                            signupRole === r
+                              ? "bg-primary text-primary-foreground shadow-sm"
+                              : "text-muted-foreground hover:text-foreground"
+                          }`}
+                        >
+                          {r === "WORKER"
+                            ? "Worker"
+                            : r === "FARMER"
+                              ? "Farmer"
+                              : "Buyer"}
+                        </button>
+                      )
+                    )}
+                  </div>
+                </div>
+
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <label className="block text-xs font-medium text-foreground">
+                      Email Destination
+                    </label>
+                    {deliveryDestination && (
+                      <span className="text-[11px] font-mono text-cyan-300/90">
+                        Sent to {deliveryDestination}
+                      </span>
+                    )}
+                  </div>
                   <div className="relative">
                     <Mail className="w-4 h-4 text-muted-foreground absolute left-3.5 top-1/2 -translate-y-1/2" />
                     <input
@@ -765,6 +995,7 @@ export function AquiloopAuthScreen() {
                       required
                       value={email}
                       onChange={(e) => setEmail(e.target.value)}
+                      placeholder="you@example.com"
                       className="w-full pl-10 pr-4 py-2.5 rounded-xl bg-background border border-border text-sm text-foreground focus:outline-none focus:border-primary"
                     />
                   </div>
@@ -772,15 +1003,21 @@ export function AquiloopAuthScreen() {
 
                 <div className="space-y-1.5">
                   <label className="block text-xs font-medium text-foreground">
-                    Verification Code
+                    Verification Code (6-Digit OTP)
                   </label>
                   <div className="relative">
                     <KeyRound className="w-4 h-4 text-muted-foreground absolute left-3.5 top-1/2 -translate-y-1/2" />
                     <input
                       type="text"
+                      inputMode="numeric"
+                      maxLength={6}
                       required
                       value={confirmationCode}
-                      onChange={(e) => setConfirmationCode(e.target.value)}
+                      onChange={(e) =>
+                        setConfirmationCode(
+                          e.target.value.replace(/\D/g, "").slice(0, 6)
+                        )
+                      }
                       placeholder="123456"
                       className="w-full pl-10 pr-4 py-2.5 rounded-xl bg-background border border-border text-sm font-mono tracking-widest text-foreground focus:outline-none focus:border-primary"
                     />
@@ -808,10 +1045,21 @@ export function AquiloopAuthScreen() {
                 <div className="flex items-center justify-between pt-2 text-xs">
                   <button
                     type="button"
-                    onClick={handleResendCode}
-                    className="text-primary hover:underline font-medium"
+                    data-testid="resend-verification-code"
+                    disabled={resending || resendCooldown > 0}
+                    onClick={() => void handleResendCode()}
+                    className="inline-flex items-center gap-1.5 text-primary hover:underline font-medium disabled:opacity-50 disabled:no-underline"
                   >
-                    Resend code
+                    {resending && (
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    )}
+                    <span>
+                      {resending
+                        ? "Sending code..."
+                        : resendCooldown > 0
+                          ? `Resend verification code (${resendCooldown}s)`
+                          : "Resend verification code"}
+                    </span>
                   </button>
                   <button
                     type="button"
