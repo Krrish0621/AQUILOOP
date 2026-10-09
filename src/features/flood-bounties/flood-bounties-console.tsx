@@ -578,7 +578,9 @@ export function FloodBountiesConsole() {
       Boolean(patch.beforeImageLabel) ||
       Boolean(patch.cleanupCompleted) ||
       Boolean(patch.afterImageLabel) ||
-      Boolean(patch.gpsCaptured);
+      Boolean(patch.gpsCaptured) ||
+      patch.submittedLatitude !== undefined ||
+      patch.submittedLongitude !== undefined;
 
     if (needsDbUpdate) {
       try {
@@ -594,10 +596,18 @@ export function FloodBountiesConsole() {
           ...(patch.afterImageLabel
             ? { afterEvidenceKey: patch.afterImageLabel }
             : {}),
-          ...(patch.gpsCaptured
+          ...(patch.gpsCaptured ||
+          patch.submittedLatitude !== undefined ||
+          patch.submittedLongitude !== undefined
             ? {
-                submittedLatitude: target.coordinates.lat,
-                submittedLongitude: target.coordinates.lng,
+                submittedLatitude:
+                  patch.submittedLatitude !== undefined
+                    ? patch.submittedLatitude
+                    : target.evidence.submittedLatitude ?? null,
+                submittedLongitude:
+                  patch.submittedLongitude !== undefined
+                    ? patch.submittedLongitude
+                    : target.evidence.submittedLongitude ?? null,
                 submittedTimestamp: new Date().toISOString(),
               }
             : {}),
@@ -657,8 +667,8 @@ export function FloodBountiesConsole() {
         submittedAt: nowIso,
         beforeEvidenceKey: target.evidence.beforeImageLabel,
         afterEvidenceKey: target.evidence.afterImageLabel,
-        submittedLatitude: target.coordinates.lat,
-        submittedLongitude: target.coordinates.lng,
+        submittedLatitude: target.evidence.submittedLatitude ?? null,
+        submittedLongitude: target.evidence.submittedLongitude ?? null,
         submittedTimestamp: nowIso,
       });
       assertNoDataErrors(errors, "Unable to submit bounty evidence");

@@ -26,6 +26,8 @@ import type {
   StubbleListingStatus,
   StubbleNcrLocation,
   StubbleRejectionReason,
+  TaskEvidenceSubmission,
+  TaskGpsCaptureStatus,
   WeatherForecastHourlyPoint,
   ZoneWeatherSummary,
 } from "@/types";
@@ -228,12 +230,155 @@ function formatRelativeTimestamp(iso?: string | null, prefix = "Updated"): strin
   })}`;
 }
 
+export function serializeTaskDescription(params: {
+  missionCode: string;
+  zoneId: string;
+  expectedImpactLiters: number;
+  sourceActionId?: string;
+  notes?: string;
+  evidence?: TaskEvidenceSubmission;
+}): string {
+  const sanitizeSegmentValue = (val: string) =>
+    val.replace(/\|/g, " ").replace(/\s+/g, " ").trim();
+
+  const parts: string[] = [
+    `[${params.missionCode}]`,
+    `Zone: ${params.zoneId}`,
+    `Impact: ${Math.round(params.expectedImpactLiters)}`,
+  ];
+
+  if (params.sourceActionId) {
+    parts.push(`SourceAction: ${sanitizeSegmentValue(params.sourceActionId)}`);
+  }
+
+  const ev = params.evidence;
+  if (ev) {
+    if (isRealS3EvidenceKey(ev.beforeEvidenceKey)) {
+      parts.push(`BeforeKey: ${ev.beforeEvidenceKey.trim()}`);
+    }
+    if (ev.beforeUploadedAt) {
+      parts.push(`BeforeAt: ${sanitizeSegmentValue(ev.beforeUploadedAt)}`);
+    }
+    if (ev.workCompleted) {
+      parts.push("WorkDone: 1");
+    }
+    if (ev.workCompletedAt) {
+      parts.push(`WorkDoneAt: ${sanitizeSegmentValue(ev.workCompletedAt)}`);
+    }
+    if (isRealS3EvidenceKey(ev.afterEvidenceKey)) {
+      parts.push(`AfterKey: ${ev.afterEvidenceKey.trim()}`);
+    }
+    if (ev.afterUploadedAt) {
+      parts.push(`AfterAt: ${sanitizeSegmentValue(ev.afterUploadedAt)}`);
+    }
+    if (
+      typeof ev.submittedLatitude === "number" &&
+      Number.isFinite(ev.submittedLatitude) &&
+      typeof ev.submittedLongitude === "number" &&
+      Number.isFinite(ev.submittedLongitude)
+    ) {
+      parts.push(`SubmittedLat: ${ev.submittedLatitude.toFixed(6)}`);
+      parts.push(`SubmittedLng: ${ev.submittedLongitude.toFixed(6)}`);
+    }
+    if (
+      typeof ev.gpsAccuracyMeters === "number" &&
+      Number.isFinite(ev.gpsAccuracyMeters)
+    ) {
+      parts.push(`GpsAcc: ${Math.round(ev.gpsAccuracyMeters)}`);
+    }
+    if (ev.gpsStatus && ev.gpsStatus !== "NOT_CAPTURED") {
+      parts.push(`GpsStatus: ${ev.gpsStatus}`);
+    }
+    if (ev.submittedAt) {
+      parts.push(`SubmittedAt: ${sanitizeSegmentValue(ev.submittedAt)}`);
+    }
+    if (ev.rejectionReason) {
+      parts.push(
+        `RejectionReason: ${sanitizeSegmentValue(ev.rejectionReason)}`
+      );
+    }
+  }
+
+  if (params.notes && params.notes.trim()) {
+    parts.push(`Notes: ${sanitizeSegmentValue(params.notes)}`);
+  }
+
+  return parts.join(" | ");
+}
+
+function parseTaskEvidenceFromDescription(
+  description: string,
+  verifiedAt?: string | null
+): { evidence: TaskEvidenceSubmission; notes?: string } {
+  const beforeKeyMatch = description.match(/BeforeKey:\s*([^\s|]+)/i);
+  const beforeAtMatch = description.match(/BeforeAt:\s*([^|]+)/i);
+  const workDoneMatch = description.match(/WorkDone:\s*(1|true)/i);
+  const workDoneAtMatch = description.match(/WorkDoneAt:\s*([^|]+)/i);
+  const afterKeyMatch = description.match(/AfterKey:\s*([^\s|]+)/i);
+  const afterAtMatch = description.match(/AfterAt:\s*([^|]+)/i);
+  const latMatch = description.match(/SubmittedLat:\s*(-?\d+(?:\.\d+)?)/i);
+  const lngMatch = description.match(/SubmittedLng:\s*(-?\d+(?:\.\d+)?)/i);
+  const accMatch = description.match(/GpsAcc:\s*(\d+(?:\.\d+)?)/i);
+  const gpsStatusMatch = description.match(
+    /GpsStatus:\s*(CAPTURED|DENIED|UNAVAILABLE|TIMEOUT|NOT_CAPTURED)/i
+  );
+  const submittedAtMatch = description.match(/SubmittedAt:\s*([^|]+)/i);
+  const rejectionMatch = description.match(/RejectionReason:\s*([^|]+)/i);
+  const notesMatch = description.match(/Notes:\s*([^|]+)/i);
+
+  const candidateBefore = beforeKeyMatch?.[1]?.trim();
+  const candidateAfter = afterKeyMatch?.[1]?.trim();
+
+  const parsedLat = latMatch ? Number(latMatch[1]) : null;
+  const parsedLng = lngMatch ? Number(lngMatch[1]) : null;
+  const hasValidGps =
+    parsedLat !== null &&
+    Number.isFinite(parsedLat) &&
+    parsedLng !== null &&
+    Number.isFinite(parsedLng);
+
+  const rawGpsStatus = gpsStatusMatch?.[1]?.toUpperCase() as
+    | TaskGpsCaptureStatus
+    | undefined;
+
+  const gpsStatus: TaskGpsCaptureStatus = hasValidGps
+    ? "CAPTURED"
+    : rawGpsStatus ?? "NOT_CAPTURED";
+
+  return {
+    evidence: {
+      beforeEvidenceKey: isRealS3EvidenceKey(candidateBefore)
+        ? candidateBefore
+        : undefined,
+      beforeUploadedAt: beforeAtMatch?.[1]?.trim() || undefined,
+      workCompleted:
+        Boolean(workDoneMatch) || isRealS3EvidenceKey(candidateAfter),
+      workCompletedAt: workDoneAtMatch?.[1]?.trim() || undefined,
+      afterEvidenceKey: isRealS3EvidenceKey(candidateAfter)
+        ? candidateAfter
+        : undefined,
+      afterUploadedAt: afterAtMatch?.[1]?.trim() || undefined,
+      submittedLatitude: hasValidGps ? parsedLat : null,
+      submittedLongitude: hasValidGps ? parsedLng : null,
+      gpsAccuracyMeters:
+        accMatch && Number.isFinite(Number(accMatch[1]))
+          ? Number(accMatch[1])
+          : null,
+      gpsStatus,
+      submittedAt: submittedAtMatch?.[1]?.trim() || undefined,
+      verifiedAt: verifiedAt ?? undefined,
+      rejectionReason: rejectionMatch?.[1]?.trim() || undefined,
+    },
+    notes: notesMatch?.[1]?.trim() || undefined,
+  };
+}
+
 export function mapTaskRecordToMission(
   task: TaskRecord,
   index = 0
 ): MissionAssignment {
   const { zoneId, zoneCode } = inferZoneFromTask(task);
-  const codeMatch = task.description.match(/\[(MSN-\d+)\]/i);
+  const codeMatch = task.description.match(/\[(MSN-[A-Z0-9-]+)\]/i);
   const impactMatch = task.description.match(/Impact:\s*(\d+)/i);
   const sourceMatch = task.description.match(/SourceAction:\s*([a-zA-Z0-9_-]+)/i);
 
@@ -262,12 +407,18 @@ export function mapTaskRecordToMission(
       ? "Queued"
       : "Assigned";
 
+  const { evidence, notes } = parseTaskEvidenceFromDescription(
+    task.description,
+    task.verifiedAt
+  );
+
   return {
     id: task.id,
     missionCode,
     sourceActionId: sourceMatch?.[1] ?? undefined,
     actionTitle: task.title,
     description: task.description,
+    notes,
     taskType: task.taskType ?? "DRAIN_CLEARING",
     zoneId,
     zoneCode,
@@ -279,13 +430,16 @@ export function mapTaskRecordToMission(
     status,
     expectedImpactLiters,
     createdAtLabel: formatRelativeTimestamp(
-      task.verifiedAt || task.updatedAt || task.createdAt,
+      task.verifiedAt || evidence.submittedAt || task.updatedAt || task.createdAt,
       statusPrefix
     ),
+    createdAt: task.createdAt ?? undefined,
+    updatedAt: task.updatedAt ?? undefined,
     coordinates: {
       lat: task.latitude,
       lng: task.longitude,
     },
+    evidence,
   };
 }
 
@@ -367,10 +521,10 @@ export function mapBountyRecordToFloodWasteBounty(
   const hasBefore = isRealS3EvidenceKey(bounty.beforeEvidenceKey);
   const hasAfter = isRealS3EvidenceKey(bounty.afterEvidenceKey);
   const hasGps =
-    bounty.submittedLatitude !== null &&
-    bounty.submittedLatitude !== undefined &&
-    bounty.submittedLongitude !== null &&
-    bounty.submittedLongitude !== undefined;
+    typeof bounty.submittedLatitude === "number" &&
+    Number.isFinite(bounty.submittedLatitude) &&
+    typeof bounty.submittedLongitude === "number" &&
+    Number.isFinite(bounty.submittedLongitude);
 
   const evidence: BountyEvidence = {
     beforeImageLabel: hasBefore ? bounty.beforeEvidenceKey! : undefined,
@@ -409,11 +563,14 @@ export function mapBountyRecordToFloodWasteBounty(
       : undefined,
     gpsCaptured: hasGps,
     gpsLabel: hasGps
-      ? `${delhiLocality}, Delhi (${Number(bounty.submittedLatitude).toFixed(
-          4
-        )}° N, ${Number(bounty.submittedLongitude).toFixed(4)}° E)`
+      ? `${Number(bounty.submittedLatitude).toFixed(6)}, ${Number(
+          bounty.submittedLongitude
+        ).toFixed(6)}`
       : undefined,
     gpsStatusNote: hasGps ? "GPS verified for task area" : undefined,
+    submittedLatitude: hasGps ? Number(bounty.submittedLatitude) : null,
+    submittedLongitude: hasGps ? Number(bounty.submittedLongitude) : null,
+    gpsStatus: hasGps ? "CAPTURED" : "NOT_CAPTURED",
   };
 
   let parsedRejectionReason: BountyRejectionReason | undefined;

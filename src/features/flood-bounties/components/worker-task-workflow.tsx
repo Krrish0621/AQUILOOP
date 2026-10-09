@@ -5,7 +5,10 @@ import {
   AlertTriangle,
   CheckCircle2,
   Clock,
+  ExternalLink,
+  Loader2,
   MapPin,
+  Navigation,
   Play,
   Send,
   Sparkles,
@@ -28,6 +31,12 @@ import {
   buildBountyEvidenceKey,
   isRealS3EvidenceKey,
 } from "@/lib/storage-client";
+import {
+  buildGoogleMapsUrl,
+  captureBrowserGpsLocation,
+  formatGpsCoordinates,
+  hasValidGpsCoordinates,
+} from "@/lib/geolocation";
 import { fetchLatestEvidenceVerification } from "@/lib/data-client";
 import type { BountyEvidence, FloodWasteBounty } from "@/types";
 import { cn } from "@/lib/utils";
@@ -60,7 +69,6 @@ export function WorkerTaskWorkflow({
   onStartTask,
   onUpdateEvidence,
   onSubmitForVerification,
-  onOpenTaskModal,
 }: WorkerTaskWorkflowProps) {
   const [beforeNoteInput, setBeforeNoteInput] = React.useState(
     bounty.evidence.beforeNote ??
@@ -72,6 +80,9 @@ export function WorkerTaskWorkflow({
   );
   const [aiCheckCompleted, setAiCheckCompleted] = React.useState(false);
   const [isBusy, setIsBusy] = React.useState(false);
+  const [gpsErrorMessage, setGpsErrorMessage] = React.useState<string | null>(
+    null
+  );
 
   React.useEffect(() => {
     setBeforeNoteInput(
@@ -82,6 +93,7 @@ export function WorkerTaskWorkflow({
       bounty.evidence.afterNote ??
         "Cleared inlet grate completely; bagged waste staged for collection."
     );
+    setGpsErrorMessage(null);
   }, [bounty.id, bounty.evidence.beforeNote, bounty.evidence.afterNote]);
 
   React.useEffect(() => {
@@ -165,13 +177,44 @@ export function WorkerTaskWorkflow({
 
   const handleConfirmLocation = async () => {
     setIsBusy(true);
+    setGpsErrorMessage(null);
+    try {
+      const result = await captureBrowserGpsLocation();
+      if (
+        result.status === "CAPTURED" &&
+        hasValidGpsCoordinates(result.latitude, result.longitude)
+      ) {
+        await onUpdateEvidence(bounty.id, {
+          gpsCaptured: true,
+          submittedLatitude: result.latitude,
+          submittedLongitude: result.longitude,
+          gpsAccuracyMeters: result.accuracyMeters,
+          gpsStatus: "CAPTURED",
+          gpsLabel: `${formatGpsCoordinates(
+            result.latitude,
+            result.longitude
+          )}`,
+          gpsStatusNote: "GPS confirmed via browser geolocation",
+        });
+      } else {
+        setGpsErrorMessage(result.message);
+      }
+    } finally {
+      setIsBusy(false);
+    }
+  };
+
+  const handleContinueWithoutGps = async () => {
+    setIsBusy(true);
     try {
       await onUpdateEvidence(bounty.id, {
         gpsCaptured: true,
-        gpsLabel: `${bounty.delhiLocality}, Delhi (${bounty.coordinates.lat.toFixed(
-          4
-        )}° N, ${bounty.coordinates.lng.toFixed(4)}° E)`,
-        gpsStatusNote: "GPS confirmed for task location",
+        submittedLatitude: null,
+        submittedLongitude: null,
+        gpsAccuracyMeters: null,
+        gpsStatus: "UNAVAILABLE",
+        gpsLabel: "Not available",
+        gpsStatusNote: "GPS coordinates not available",
       });
     } finally {
       setIsBusy(false);
@@ -469,17 +512,24 @@ export function WorkerTaskWorkflow({
             {activeStep === 4 && (
               <div className="rounded-xl border border-primary/45 bg-surface-elevated/80 p-4 space-y-3">
                 <div className="flex items-center gap-2">
-                  <MapPin className="h-4 w-4 text-info" />
+                  <Navigation className="h-4 w-4 text-info" />
                   <h4 className="text-xs font-semibold uppercase font-mono text-foreground">
-                    Step 4 · Confirm Location
+                    Step 4 · Capture Field GPS Location
                   </h4>
                 </div>
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                  <p className="text-xs text-muted-foreground">
-                    Confirm field location at {bounty.delhiLocality}, Delhi (
-                    {bounty.coordinates.lat.toFixed(4)}° N,{" "}
-                    {bounty.coordinates.lng.toFixed(4)}° E).
-                  </p>
+                <p className="text-xs text-muted-foreground">
+                  Allow browser geolocation access to record your exact GPS
+                  latitude and longitude at {bounty.delhiLocality}, Delhi.
+                </p>
+
+                {gpsErrorMessage && (
+                  <div className="rounded-lg border border-warning/40 bg-warning/10 p-3 text-xs text-warning flex items-start gap-2">
+                    <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
+                    <span>{gpsErrorMessage}</span>
+                  </div>
+                )}
+
+                <div className="flex flex-col gap-2 sm:flex-row">
                   <Button
                     type="button"
                     variant="default"
@@ -488,16 +538,79 @@ export function WorkerTaskWorkflow({
                     onClick={() => void handleConfirmLocation()}
                     className="shrink-0 gap-1.5"
                   >
-                    <MapPin className="h-3.5 w-3.5" />
-                    <span>{isBusy ? "SAVING..." : "CONFIRM LOCATION"}</span>
+                    {isBusy ? (
+                      <>
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        <span>CAPTURING GPS...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Navigation className="h-3.5 w-3.5" />
+                        <span>
+                          {gpsErrorMessage
+                            ? "RETRY GPS CAPTURE"
+                            : "CAPTURE GPS LOCATION"}
+                        </span>
+                      </>
+                    )}
                   </Button>
+
+                  {gpsErrorMessage && (
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="sm"
+                      disabled={isBusy}
+                      onClick={() => void handleContinueWithoutGps()}
+                      className="shrink-0 gap-1.5"
+                    >
+                      <span>CONTINUE WITHOUT GPS (NOT AVAILABLE)</span>
+                    </Button>
+                  )}
                 </div>
               </div>
             )}
 
             {/* Step 5: Submit Evidence */}
             {activeStep === 5 && (
-              <div className="rounded-xl border border-primary bg-primary/10 p-4">
+              <div className="rounded-xl border border-primary bg-primary/10 p-4 space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border bg-surface p-3 text-xs">
+                  <div>
+                    <span className="font-mono text-[10px] uppercase text-muted-foreground block">
+                      Recorded GPS Coordinates
+                    </span>
+                    <span className="font-mono font-semibold text-foreground">
+                      {formatGpsCoordinates(
+                        ev.submittedLatitude,
+                        ev.submittedLongitude
+                      )}
+                    </span>
+                  </div>
+                  {buildGoogleMapsUrl(
+                    ev.submittedLatitude,
+                    ev.submittedLongitude
+                  ) ? (
+                    <a
+                      href={
+                        buildGoogleMapsUrl(
+                          ev.submittedLatitude,
+                          ev.submittedLongitude
+                        )!
+                      }
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 rounded-md border border-primary/40 bg-primary/10 px-2.5 py-1 font-mono text-[11px] font-semibold text-primary hover:bg-primary/20"
+                    >
+                      <ExternalLink className="h-3 w-3" />
+                      Open in Google Maps
+                    </a>
+                  ) : (
+                    <span className="font-mono text-[11px] text-muted-foreground">
+                      Google Maps: Not available
+                    </span>
+                  )}
+                </div>
+
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                   <div>
                     <h4 className="font-mono text-xs font-bold uppercase text-foreground">

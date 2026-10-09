@@ -8,8 +8,10 @@ import {
   CloudUpload,
   Image as ImageIcon,
   Loader2,
+  Maximize2,
   RefreshCw,
   Upload,
+  X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { StatusBadge } from "@/components/shared/status-badge";
@@ -550,6 +552,7 @@ export function S3EvidenceImage({
   const [error, setError] = React.useState<string | null>(null);
   const [retriedAfterError, setRetriedAfterError] =
     React.useState<boolean>(false);
+  const [isEnlarged, setIsEnlarged] = React.useState<boolean>(false);
 
   const isRealKey = isRealS3EvidenceKey(s3Key);
 
@@ -560,8 +563,8 @@ export function S3EvidenceImage({
         setIsLoading(false);
         setError(
           s3Key
-            ? "Evidence image could not be loaded."
-            : "No evidence image uploaded yet."
+            ? "Not available — Evidence image could not be loaded."
+            : "Not available"
         );
         return;
       }
@@ -584,7 +587,10 @@ export function S3EvidenceImage({
       } catch (err) {
         setSignedUrl(null);
         setError(
-          formatStorageError(err, "Evidence image could not be loaded.")
+          formatStorageError(
+            err,
+            "Not available — Evidence image could not be loaded."
+          )
         );
       } finally {
         setIsLoading(false);
@@ -595,8 +601,20 @@ export function S3EvidenceImage({
 
   React.useEffect(() => {
     setRetriedAfterError(false);
+    setIsEnlarged(false);
     void fetchUrl(false);
   }, [fetchUrl]);
+
+  React.useEffect(() => {
+    if (!isEnlarged) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setIsEnlarged(false);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [isEnlarged]);
 
   const toneBorder =
     tone === "warning"
@@ -613,100 +631,187 @@ export function S3EvidenceImage({
       : "text-primary";
 
   return (
-    <div className={cn("rounded-xl border p-3.5 space-y-2.5", toneBorder, className)}>
+    <>
       <div
         className={cn(
-          "flex items-center justify-between gap-2 font-mono text-[10px] font-bold uppercase",
-          toneHeader
+          "rounded-xl border p-3.5 space-y-2.5",
+          toneBorder,
+          className
         )}
       >
-        <span className="inline-flex items-center gap-1">
-          <Camera className="h-3.5 w-3.5" />
-          {label}
-        </span>
-        {timestamp && (
-          <span className="text-muted-foreground font-normal normal-case">
-            {timestamp}
+        <div
+          className={cn(
+            "flex items-center justify-between gap-2 font-mono text-[10px] font-bold uppercase",
+            toneHeader
+          )}
+        >
+          <span className="inline-flex items-center gap-1">
+            <Camera className="h-3.5 w-3.5" />
+            {label}
           </span>
-        )}
-      </div>
-
-      {/* Image Display Area — Clean Photograph Without Path Overlay */}
-      <div className="relative min-h-[180px] w-full overflow-hidden rounded-lg border border-border bg-background/90 flex items-center justify-center">
-        {isLoading && !signedUrl ? (
-          <div className="flex h-52 sm:h-56 w-full flex-col items-center justify-center gap-2 bg-surface-muted/40 animate-pulse p-4 text-xs text-muted-foreground">
-            <Loader2 className="h-5 w-5 animate-spin text-primary" />
-            <span className="font-mono text-[11px]">
-              Loading evidence photo...
+          {timestamp && (
+            <span className="text-muted-foreground font-normal normal-case">
+              {timestamp}
             </span>
-          </div>
-        ) : signedUrl ? (
-          <>
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src={signedUrl}
-              alt={label}
-              loading="eager"
-              decoding="async"
-              fetchPriority="high"
-              className="h-52 sm:h-56 w-full object-cover"
-              onError={() => {
-                if (!retriedAfterError) {
-                  setRetriedAfterError(true);
-                  void fetchUrl(true);
-                } else {
-                  setSignedUrl(null);
-                  setError("Evidence image could not be loaded.");
-                }
-              }}
-            />
-            <button
-              type="button"
-              onClick={() => void fetchUrl(true)}
-              className="absolute right-2 top-2 rounded-md border border-border/60 bg-background/75 p-1.5 text-muted-foreground backdrop-blur-sm transition-colors hover:text-foreground"
-              title="Refresh evidence image"
-              aria-label="Refresh evidence image"
-            >
-              <RefreshCw className="h-3 w-3" />
-            </button>
-          </>
-        ) : (
-          <div className="flex flex-col items-center justify-center gap-2 p-4 text-center">
-            <AlertTriangle className="h-5 w-5 text-warning" />
-            <p className="text-xs font-medium text-foreground">
-              {error ?? "Evidence image could not be loaded."}
-            </p>
-            {isRealKey && (
-              <Button
+          )}
+        </div>
+
+        {/* Image Display Area — Clean Photograph With Click-to-Enlarge */}
+        <div className="relative min-h-[200px] w-full overflow-hidden rounded-lg border border-border bg-background/90 flex items-center justify-center">
+          {isLoading && !signedUrl ? (
+            <div className="flex h-56 sm:h-64 w-full flex-col items-center justify-center gap-2 bg-surface-muted/40 animate-pulse p-4 text-xs text-muted-foreground">
+              <Loader2 className="h-5 w-5 animate-spin text-primary" />
+              <span className="font-mono text-[11px]">
+                Loading evidence photo...
+              </span>
+            </div>
+          ) : signedUrl ? (
+            <>
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={signedUrl}
+                alt={label}
+                loading="eager"
+                decoding="async"
+                fetchPriority="high"
+                onClick={() => setIsEnlarged(true)}
+                className="h-56 sm:h-64 w-full cursor-zoom-in object-cover transition-transform duration-150 hover:scale-[1.01]"
+                onError={() => {
+                  if (!retriedAfterError) {
+                    setRetriedAfterError(true);
+                    void fetchUrl(true);
+                  } else {
+                    setSignedUrl(null);
+                    setError(
+                      "Not available — Evidence image could not be loaded."
+                    );
+                  }
+                }}
+              />
+              <button
                 type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => void fetchUrl(true)}
-                className="h-7 gap-1 text-[11px]"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setIsEnlarged(true);
+                }}
+                className="absolute bottom-2 left-2 inline-flex items-center gap-1 rounded-md border border-border/70 bg-background/85 px-2 py-1 font-mono text-[10px] font-medium text-foreground backdrop-blur-sm transition-colors hover:bg-background"
+                title="Click to enlarge photo"
+                aria-label={`Enlarge ${label}`}
+              >
+                <Maximize2 className="h-3 w-3 text-primary" />
+                <span>Click to enlarge</span>
+              </button>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  void fetchUrl(true);
+                }}
+                className="absolute right-2 top-2 rounded-md border border-border/60 bg-background/75 p-1.5 text-muted-foreground backdrop-blur-sm transition-colors hover:text-foreground"
+                title="Refresh evidence image"
+                aria-label="Refresh evidence image"
               >
                 <RefreshCw className="h-3 w-3" />
-                <span>Retry Load</span>
-              </Button>
-            )}
-          </div>
-        )}
+              </button>
+            </>
+          ) : (
+            <div className="flex flex-col items-center justify-center gap-2 p-4 text-center">
+              <AlertTriangle className="h-5 w-5 text-warning" />
+              <p className="text-xs font-semibold text-foreground">
+                {error ?? "Not available"}
+              </p>
+              <p className="text-[11px] text-muted-foreground">
+                No verified photo available for this slot.
+              </p>
+              {isRealKey && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => void fetchUrl(true)}
+                  className="h-7 gap-1 text-[11px]"
+                >
+                  <RefreshCw className="h-3 w-3" />
+                  <span>Retry Load</span>
+                </Button>
+              )}
+            </div>
+          )}
+        </div>
+
+        <div className="flex items-center justify-between gap-2 text-xs">
+          {note ? (
+            <p className="text-xs text-muted-foreground line-clamp-2">{note}</p>
+          ) : (
+            <span className="text-[11px] text-muted-foreground">
+              {signedUrl ? "Uploaded field evidence" : "Not available"}
+            </span>
+          )}
+          {signedUrl && (
+            <span className="shrink-0 inline-flex items-center gap-1 font-mono text-[10px] text-emerald-400">
+              <CheckCircle2 className="h-3 w-3" />
+              Verified Photo
+            </span>
+          )}
+        </div>
       </div>
 
-      <div className="flex items-center justify-between gap-2 text-xs">
-        {note ? (
-          <p className="text-xs text-muted-foreground line-clamp-2">{note}</p>
-        ) : (
-          <span className="text-[11px] text-muted-foreground">
-            Example field evidence
-          </span>
-        )}
-        {signedUrl && (
-          <span className="shrink-0 inline-flex items-center gap-1 font-mono text-[10px] text-emerald-400">
-            <CheckCircle2 className="h-3 w-3" />
-            Verified Photo
-          </span>
-        )}
-      </div>
-    </div>
+      {/* Click-to-Enlarge Lightbox Modal */}
+      {isEnlarged && signedUrl && (
+        <div
+          className="fixed inset-0 z-[70] flex items-center justify-center bg-black/85 p-4 backdrop-blur-sm"
+          role="dialog"
+          aria-modal="true"
+          aria-label={`${label} enlarged preview`}
+          onClick={() => setIsEnlarged(false)}
+        >
+          <div
+            className="relative flex max-h-[92vh] w-full max-w-4xl flex-col overflow-hidden rounded-2xl border border-border-strong bg-surface p-4 shadow-2xl space-y-3"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between gap-3 border-b border-border pb-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <span
+                  className={cn(
+                    "inline-flex items-center gap-1.5 font-mono text-xs font-bold uppercase",
+                    toneHeader
+                  )}
+                >
+                  <Camera className="h-4 w-4" />
+                  {label}
+                </span>
+                {timestamp && (
+                  <span className="font-mono text-xs text-muted-foreground">
+                    · {timestamp}
+                  </span>
+                )}
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsEnlarged(false)}
+                className="inline-flex items-center gap-1 rounded-lg border border-border bg-surface-muted px-2.5 py-1 text-xs font-medium text-foreground hover:bg-surface-elevated"
+                aria-label="Close enlarged preview"
+              >
+                <X className="h-4 w-4" />
+                <span>Close</span>
+              </button>
+            </div>
+
+            <div className="flex max-h-[78vh] w-full items-center justify-center overflow-auto rounded-xl bg-black/60 p-2">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={signedUrl}
+                alt={`${label} full size`}
+                className="max-h-[75vh] max-w-full rounded-lg object-contain"
+              />
+            </div>
+
+            {note && (
+              <p className="text-xs text-muted-foreground px-1">{note}</p>
+            )}
+          </div>
+        </div>
+      )}
+    </>
   );
 }

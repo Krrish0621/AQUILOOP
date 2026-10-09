@@ -367,12 +367,36 @@ export interface ActionRecommendation {
     | "FLOW_ROUTING";
 }
 
+export type TaskGpsCaptureStatus =
+  | "CAPTURED"
+  | "DENIED"
+  | "UNAVAILABLE"
+  | "TIMEOUT"
+  | "NOT_CAPTURED";
+
+export interface TaskEvidenceSubmission {
+  beforeEvidenceKey?: string;
+  beforeUploadedAt?: string;
+  workCompleted?: boolean;
+  workCompletedAt?: string;
+  afterEvidenceKey?: string;
+  afterUploadedAt?: string;
+  submittedLatitude?: number | null;
+  submittedLongitude?: number | null;
+  gpsAccuracyMeters?: number | null;
+  gpsStatus?: TaskGpsCaptureStatus;
+  submittedAt?: string;
+  verifiedAt?: string;
+  rejectionReason?: string;
+}
+
 export interface MissionAssignment {
   id: string;
   missionCode: string;
   sourceActionId?: string;
   actionTitle: string;
   description?: string;
+  notes?: string;
   taskType?: string;
   zoneId: string;
   zoneCode: string;
@@ -384,7 +408,10 @@ export interface MissionAssignment {
   status: MonsoonMissionStatus;
   expectedImpactLiters: number;
   createdAtLabel: string;
+  createdAt?: string;
+  updatedAt?: string;
   coordinates: GeoCoordinate;
+  evidence?: TaskEvidenceSubmission;
 }
 
 export interface SimulationInputs {
@@ -441,6 +468,10 @@ export interface BountyEvidence {
   gpsCaptured?: boolean;
   gpsLabel?: string;
   gpsStatusNote?: string;
+  submittedLatitude?: number | null;
+  submittedLongitude?: number | null;
+  gpsAccuracyMeters?: number | null;
+  gpsStatus?: TaskGpsCaptureStatus;
 }
 
 export interface VerificationResult {

@@ -40,11 +40,20 @@ if (weatherForecastTable) {
   );
 }
 
+const taskTable = backend.data.resources.tables["Task"];
 const bountyTable = backend.data.resources.tables["Bounty"];
 const stubbleListingTable = backend.data.resources.tables["StubbleListing"];
 const evidenceVerificationTable =
   backend.data.resources.tables["EvidenceVerification"];
 const evidenceBucket = backend.storage.resources.bucket;
+
+if (taskTable) {
+  taskTable.grantReadData(backend.verifyEvidence.resources.lambda);
+  backend.verifyEvidence.addEnvironment(
+    "TASK_TABLE_NAME",
+    taskTable.tableName
+  );
+}
 
 if (bountyTable) {
   bountyTable.grantReadData(backend.verifyEvidence.resources.lambda);

@@ -38,6 +38,7 @@ import type {
   MonsoonMissionStatus,
   MonsoonPhase,
   SpongeMapAsset,
+  TaskEvidenceSubmission,
   ZoneWeatherSummary,
 } from "@/types";
 import { RoleAccessNotice } from "@/components/auth/role-access-notice";
@@ -49,9 +50,11 @@ import {
   getDataClient,
   mapTaskRecordToMission,
   mapUiTaskTypeToEnum,
+  serializeTaskDescription,
   summarizeLocationWeather,
   triggerOperatorWeatherRefresh,
 } from "@/lib/data-client";
+import { prefetchEvidenceSignedUrls } from "@/lib/storage-client";
 
 interface DispatchModalDraft {
   mode: "DISPATCH" | "CREATE";
@@ -150,6 +153,12 @@ export function MonsoonLoopConsole() {
       });
       const mapped = sorted.map((record, index) =>
         mapTaskRecordToMission(record, index)
+      );
+      prefetchEvidenceSignedUrls(
+        mapped.flatMap((m) => [
+          m.evidence?.beforeEvidenceKey,
+          m.evidence?.afterEvidenceKey,
+        ])
       );
       setMissions(mapped);
       setSelectedMissionId((prev) =>
@@ -602,22 +611,26 @@ export function MonsoonLoopConsole() {
         );
         const missionCode =
           draft.missionCode || existingTask?.missionCode || "MSN-301";
-        const descriptionParts = [
-          `[${missionCode}]`,
-          `Zone: ${existingTask?.zoneId || selectedZone.id}`,
-          `Impact: ${draft.expectedImpactLiters}`,
-        ];
-        if (draft.sourceActionId) {
-          descriptionParts.push(`SourceAction: ${draft.sourceActionId}`);
-        }
-        if (draft.notes) {
-          descriptionParts.push(draft.notes);
-        }
+
+        const nextDescription = serializeTaskDescription({
+          missionCode,
+          zoneId: existingTask?.zoneId || selectedZone.id,
+          expectedImpactLiters: draft.expectedImpactLiters,
+          sourceActionId: draft.sourceActionId ?? existingTask?.sourceActionId,
+          notes: draft.notes ?? existingTask?.notes,
+          evidence:
+            existingTask?.status === "FAILED"
+              ? {
+                  ...existingTask.evidence,
+                  rejectionReason: undefined,
+                }
+              : existingTask?.evidence,
+        });
 
         const { data: updated, errors } = await client.models.Task.update({
           id: draft.existingTaskId,
           title: draft.actionTitle,
-          description: descriptionParts.join(" | "),
+          description: nextDescription,
           locationName: draft.location,
           taskType: mapUiTaskTypeToEnum(draft.taskType),
           priority: draft.priority,
@@ -651,21 +664,18 @@ export function MonsoonLoopConsole() {
       const missionCode = `MSN-${nextCodeNumber}`;
       const createdBy =
         user?.email || user?.username || "operator.demo@aquiloop.test";
-      const descriptionParts = [
-        `[${missionCode}]`,
-        `Zone: ${selectedZone.id}`,
-        `Impact: ${draft.expectedImpactLiters}`,
-      ];
-      if (draft.sourceActionId) {
-        descriptionParts.push(`SourceAction: ${draft.sourceActionId}`);
-      }
-      if (draft.notes) {
-        descriptionParts.push(draft.notes);
-      }
+
+      const nextDescription = serializeTaskDescription({
+        missionCode,
+        zoneId: selectedZone.id,
+        expectedImpactLiters: draft.expectedImpactLiters,
+        sourceActionId: draft.sourceActionId,
+        notes: draft.notes,
+      });
 
       const { data: created, errors } = await client.models.Task.create({
         title: draft.actionTitle,
-        description: descriptionParts.join(" | "),
+        description: nextDescription,
         locationName: draft.location,
         latitude: selectedZone.center.lat,
         longitude: selectedZone.center.lng,
@@ -703,21 +713,108 @@ export function MonsoonLoopConsole() {
     }
   };
 
+  const handleUpdateMissionEvidence = async (
+    missionId: string,
+    evidencePatch: Partial<TaskEvidenceSubmission>,
+    nextStatus?: MonsoonMissionStatus
+  ) => {
+    setTasksError(null);
+    const client = getDataClient();
+    const existingTask = missions.find((m) => m.id === missionId);
+    if (!existingTask) {
+      throw new Error("Task not found");
+    }
+
+    const workerIdentity =
+      user?.email || user?.username || "worker.demo@aquiloop.test";
+
+    const mergedEvidence: TaskEvidenceSubmission = {
+      ...existingTask.evidence,
+      ...evidencePatch,
+    };
+
+    const nextDescription = serializeTaskDescription({
+      missionCode: existingTask.missionCode,
+      zoneId: existingTask.zoneId,
+      expectedImpactLiters: existingTask.expectedImpactLiters,
+      sourceActionId: existingTask.sourceActionId,
+      notes: existingTask.notes,
+      evidence: mergedEvidence,
+    });
+
+    const updatePayload =
+      activeRole === "OPERATOR"
+        ? {
+            id: missionId,
+            description: nextDescription,
+            ...(nextStatus ? { status: nextStatus } : {}),
+            ...(nextStatus === "VERIFIED"
+              ? { verifiedAt: new Date().toISOString() }
+              : {}),
+          }
+        : {
+            id: missionId,
+            description: nextDescription,
+            assignedWorkerId: workerIdentity,
+            ...(nextStatus ? { status: nextStatus } : {}),
+          };
+
+    const { data: updated, errors } =
+      await client.models.Task.update(updatePayload);
+    assertNoDataErrors(errors, "Unable to save task evidence");
+
+    if (!updated) {
+      throw new Error("Unable to save task evidence");
+    }
+
+    setMissions((prev) =>
+      prev.map((m, idx) =>
+        m.id === missionId ? mapTaskRecordToMission(updated, idx) : m
+      )
+    );
+  };
+
   const handleUpdateMissionStatus = async (
     missionId: string,
-    nextStatus: MonsoonMissionStatus
+    nextStatus: MonsoonMissionStatus,
+    rejectionReason?: string
   ) => {
     setTasksError(null);
     try {
       const client = getDataClient();
       const workerIdentity =
         user?.email || user?.username || "worker.demo@aquiloop.test";
+      const existingTask = missions.find((m) => m.id === missionId);
+
+      const nextDescription = existingTask
+        ? serializeTaskDescription({
+            missionCode: existingTask.missionCode,
+            zoneId: existingTask.zoneId,
+            expectedImpactLiters: existingTask.expectedImpactLiters,
+            sourceActionId: existingTask.sourceActionId,
+            notes: existingTask.notes,
+            evidence: {
+              ...existingTask.evidence,
+              ...(nextStatus === "SUBMITTED" &&
+              !existingTask.evidence?.submittedAt
+                ? { submittedAt: new Date().toISOString() }
+                : {}),
+              ...(nextStatus === "FAILED" && rejectionReason
+                ? { rejectionReason }
+                : {}),
+              ...(nextStatus === "VERIFIED"
+                ? { rejectionReason: undefined }
+                : {}),
+            },
+          })
+        : undefined;
 
       const updatePayload =
         activeRole === "OPERATOR"
           ? {
               id: missionId,
               status: nextStatus,
+              ...(nextDescription ? { description: nextDescription } : {}),
               ...(nextStatus === "VERIFIED"
                 ? { verifiedAt: new Date().toISOString() }
                 : {}),
@@ -726,6 +823,7 @@ export function MonsoonLoopConsole() {
               id: missionId,
               status: nextStatus,
               assignedWorkerId: workerIdentity,
+              ...(nextDescription ? { description: nextDescription } : {}),
             };
 
       const { data: updated, errors } =
@@ -920,6 +1018,7 @@ export function MonsoonLoopConsole() {
           onUpdateMissionStatus={(id, status) =>
             void handleUpdateMissionStatus(id, status)
           }
+          onUpdateMissionEvidence={handleUpdateMissionEvidence}
         />
       ) : (
         <>
@@ -999,8 +1098,8 @@ export function MonsoonLoopConsole() {
             onOpenDispatchModal={openDefaultDispatchModal}
             onOpenDispatchForExistingTask={openDispatchForExistingTask}
             onOpenManualCreateModal={openManualCreateTaskModal}
-            onUpdateMissionStatus={(id, status) =>
-              void handleUpdateMissionStatus(id, status)
+            onUpdateMissionStatus={(id, status, rejectionReason) =>
+              void handleUpdateMissionStatus(id, status, rejectionReason)
             }
           />
         </>

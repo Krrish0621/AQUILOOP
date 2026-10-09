@@ -6,10 +6,11 @@ import {
   Camera,
   CheckCircle2,
   Clock,
+  ExternalLink,
   Eye,
   MapPin,
+  Navigation,
   ShieldCheck,
-  Sparkles,
   UserCheck,
   X,
   XCircle,
@@ -27,6 +28,11 @@ import { EmptyState } from "@/components/shared/empty-state";
 import { S3EvidenceImage } from "@/components/shared/s3-evidence-media";
 import { AiEvidenceCheckPanel } from "@/components/shared/ai-evidence-check-panel";
 import { isRealS3EvidenceKey } from "@/lib/storage-client";
+import {
+  buildGoogleMapsUrl,
+  formatGpsCoordinates,
+  hasValidGpsCoordinates,
+} from "@/lib/geolocation";
 import type { BountyRejectionReason, FloodWasteBounty } from "@/types";
 
 interface OperatorVerificationPanelProps {
@@ -165,7 +171,7 @@ export function OperatorVerificationPanel({
                       <UserCheck className="h-3.5 w-3.5 text-primary" />
                       Worker:{" "}
                       <strong className="text-foreground">
-                        {bounty.assignedWorkerName ?? "Ramesh Kumar"}
+                        {bounty.assignedWorkerName || "Not available"}
                       </strong>
                     </span>
                     <span className="inline-flex items-center gap-1">
@@ -224,7 +230,8 @@ export function OperatorVerificationPanel({
                   {reviewBounty.title} — {reviewBounty.delhiLocality}
                 </h3>
                 <p className="text-xs text-muted-foreground">
-                  Task Requirement: Clear {reviewBounty.estimatedWasteKgRange} at{" "}
+                  Task ID: <span className="font-mono">{reviewBounty.id}</span> ·
+                  Requirement: Clear {reviewBounty.estimatedWasteKgRange} at{" "}
                   {reviewBounty.corridorDetail}
                 </p>
               </div>
@@ -239,64 +246,106 @@ export function OperatorVerificationPanel({
               </button>
             </div>
 
-            {/* Worker, Location & Timestamp Strip */}
+            {/* Worker, GPS Coordinates & Timestamp Strip */}
             <div className="grid grid-cols-1 gap-2.5 rounded-xl border border-border bg-surface-muted/50 p-3.5 text-xs sm:grid-cols-3">
               <div>
                 <span className="font-mono text-[10px] uppercase text-muted-foreground block">
-                  Worker
+                  Assigned Worker
                 </span>
                 <span className="font-semibold text-foreground inline-flex items-center gap-1.5 mt-0.5">
                   <UserCheck className="h-3.5 w-3.5 text-primary" />
-                  {reviewBounty.assignedWorkerName ?? "Ramesh Kumar"}
+                  {reviewBounty.assignedWorkerName || "Not available"}
                 </span>
               </div>
 
               <div>
                 <span className="font-mono text-[10px] uppercase text-muted-foreground block">
-                  Location Proof
+                  Recorded GPS Coordinates
                 </span>
-                <span className="font-semibold text-foreground inline-flex items-center gap-1.5 mt-0.5">
-                  <MapPin className="h-3.5 w-3.5 text-info" />
-                  {reviewBounty.evidence.gpsLabel ??
-                    `${reviewBounty.delhiLocality}, Delhi`}
+                <span className="font-mono font-semibold text-foreground inline-flex items-center gap-1.5 mt-0.5">
+                  <Navigation className="h-3.5 w-3.5 text-info" />
+                  {formatGpsCoordinates(
+                    reviewBounty.evidence.submittedLatitude,
+                    reviewBounty.evidence.submittedLongitude
+                  )}
                 </span>
+                {buildGoogleMapsUrl(
+                  reviewBounty.evidence.submittedLatitude,
+                  reviewBounty.evidence.submittedLongitude
+                ) ? (
+                  <a
+                    href={
+                      buildGoogleMapsUrl(
+                        reviewBounty.evidence.submittedLatitude,
+                        reviewBounty.evidence.submittedLongitude
+                      )!
+                    }
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="mt-1 inline-flex items-center gap-1 font-mono text-[11px] font-semibold text-primary hover:underline"
+                  >
+                    <ExternalLink className="h-3 w-3" />
+                    Open in Google Maps
+                  </a>
+                ) : (
+                  <span className="mt-1 block font-mono text-[10px] text-muted-foreground">
+                    Google Maps: Not available
+                  </span>
+                )}
               </div>
 
               <div>
                 <span className="font-mono text-[10px] uppercase text-muted-foreground block">
-                  Timestamp
+                  Submission Timestamp
                 </span>
                 <span className="font-mono text-foreground inline-flex items-center gap-1.5 mt-0.5">
                   <Clock className="h-3.5 w-3.5 text-warning" />
-                  {reviewBounty.evidence.afterTimestamp ??
-                    "Today · 14:40 IST"}
+                  {reviewBounty.evidence.afterTimestamp || "Not available"}
                 </span>
               </div>
             </div>
 
             {/* BEFORE vs AFTER Visual Comparison (Real Amazon S3 Signed URLs) */}
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-              <S3EvidenceImage
-                s3Key={reviewBounty.evidence.beforeImageLabel}
-                label="BEFORE PHOTO"
-                timestamp={reviewBounty.evidence.beforeTimestamp ?? "Captured"}
-                note={
-                  reviewBounty.evidence.beforeNote ??
-                  "Drain inlet obstructed by solid plastic waste."
-                }
-                tone="warning"
-              />
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="font-mono text-[11px] font-bold uppercase text-foreground flex items-center gap-1.5">
+                  <Camera className="h-3.5 w-3.5 text-primary" />
+                  Submitted Field Photos (Click Image to Enlarge)
+                </span>
+                <span className="font-mono text-[10px] text-muted-foreground">
+                  {hasValidGpsCoordinates(
+                    reviewBounty.evidence.submittedLatitude,
+                    reviewBounty.evidence.submittedLongitude
+                  )
+                    ? `GPS: ${formatGpsCoordinates(
+                        reviewBounty.evidence.submittedLatitude,
+                        reviewBounty.evidence.submittedLongitude
+                      )}`
+                    : "GPS: Not available"}
+                </span>
+              </div>
 
-              <S3EvidenceImage
-                s3Key={reviewBounty.evidence.afterImageLabel}
-                label="AFTER PHOTO"
-                timestamp={reviewBounty.evidence.afterTimestamp ?? "Submitted"}
-                note={
-                  reviewBounty.evidence.afterNote ??
-                  "Waste cleared and grate bars open for stormwater flow."
-                }
-                tone="success"
-              />
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                <S3EvidenceImage
+                  key={`${reviewBounty.id}-before`}
+                  s3Key={reviewBounty.evidence.beforeImageLabel}
+                  label="BEFORE PHOTO"
+                  timestamp={reviewBounty.evidence.beforeTimestamp}
+                  note={reviewBounty.evidence.beforeNote}
+                  tone="warning"
+                  className="min-h-[220px]"
+                />
+
+                <S3EvidenceImage
+                  key={`${reviewBounty.id}-after`}
+                  s3Key={reviewBounty.evidence.afterImageLabel}
+                  label="AFTER PHOTO"
+                  timestamp={reviewBounty.evidence.afterTimestamp}
+                  note={reviewBounty.evidence.afterNote}
+                  tone="success"
+                  className="min-h-[220px]"
+                />
+              </div>
             </div>
 
             {/* Real Amazon Bedrock AI Evidence Check (Assistive Only) */}

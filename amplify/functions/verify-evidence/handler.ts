@@ -720,6 +720,26 @@ export const handler = async (event: VerifyEvidenceEvent) => {
 
   if (evidenceType === "BOUNTY") {
     resourceData = await getDynamoItemById(bountyTable, resourceId);
+    let beforeKey = String(resourceData?.beforeEvidenceKey || "").trim();
+    let afterKey = String(resourceData?.afterEvidenceKey || "").trim();
+
+    if (!resourceData) {
+      const taskTable =
+        process.env.TASK_TABLE_NAME || bountyTable.replace(/^Bounty-/, "Task-");
+      try {
+        resourceData = await getDynamoItemById(taskTable, resourceId);
+      } catch {
+        resourceData = null;
+      }
+      if (resourceData) {
+        const desc = String(resourceData.description || "");
+        const beforeMatch = desc.match(/(?:^|\|\s*)BeforeKey:\s*([^|]+)/i);
+        const afterMatch = desc.match(/(?:^|\|\s*)AfterKey:\s*([^|]+)/i);
+        beforeKey = beforeMatch ? beforeMatch[1].trim() : "";
+        afterKey = afterMatch ? afterMatch[1].trim() : "";
+      }
+    }
+
     if (!resourceData) {
       return {
         success: false,
@@ -727,8 +747,6 @@ export const handler = async (event: VerifyEvidenceEvent) => {
         message: "Evidence could not be analyzed",
       };
     }
-    const beforeKey = String(resourceData.beforeEvidenceKey || "").trim();
-    const afterKey = String(resourceData.afterEvidenceKey || "").trim();
     if (!beforeKey || !afterKey) {
       return {
         success: false,
@@ -739,7 +757,10 @@ export const handler = async (event: VerifyEvidenceEvent) => {
     evidenceFingerprint = `${beforeKey}|${afterKey}`;
     s3KeysToLoad = [beforeKey, afterKey];
     ownerId = String(
-      resourceData.claimedBy || resourceData.createdBy || callerId
+      resourceData.claimedBy ||
+        resourceData.assignedWorkerId ||
+        resourceData.createdBy ||
+        callerId
     );
   } else {
     resourceData = await getDynamoItemById(stubbleTable, resourceId);
